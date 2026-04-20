@@ -16,6 +16,8 @@ import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { writeHeapSnapshot } from "v8"
 import { TuiConfig } from "./config/tui"
 import { OPENCODE_PROCESS_ROLE, OPENCODE_RUN_ID, ensureRunID, sanitizedProcessEnv } from "@/util/opencode-process"
+import { needsPostgresDownload, downloadPostgresWithProgress } from "@/session/lcm/embedded-postgres"
+import * as prompts from "@clack/prompts"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -130,6 +132,17 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
+
+      // Download postgres if needed (first-time LCM install) with progress bar
+      if (await needsPostgresDownload()) {
+        const spinner = prompts.spinner()
+        spinner.start("Downloading OpenCode LCM database...")
+        await downloadPostgresWithProgress((percent) => {
+          spinner.message(`Downloading OpenCode LCM database... ${percent}%`)
+        })
+        spinner.stop("Download complete")
+      }
+
       const env = sanitizedProcessEnv({
         [OPENCODE_PROCESS_ROLE]: "worker",
         [OPENCODE_RUN_ID]: ensureRunID(),

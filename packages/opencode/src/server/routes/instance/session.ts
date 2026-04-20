@@ -26,6 +26,9 @@ import { lazy } from "@/util/lazy"
 import { Bus } from "@/bus"
 import { NamedError } from "@opencode-ai/shared/util/error"
 import { jsonRequest, runRequest } from "./trace"
+import { LcmIntegrity } from "@/session/lcm/integrity"
+import { ensureLcmRuntimeStrategyConfigured } from "@/session/lcm/strategy"
+import { isLcmReady } from "@/session/lcm/runtime"
 
 const log = Log.create({ service: "server" })
 
@@ -1107,5 +1110,119 @@ export const SessionRoutes = lazy(() =>
           })
           return true
         }),
+    )
+    .get(
+      "/:sessionID/lcm/check-integrity",
+      describeRoute({
+        summary: "Check LCM integrity",
+        description: "Run integrity checks on the LCM DAG for a session, reporting any inconsistencies.",
+        operationId: "session.lcm.checkIntegrity",
+        responses: {
+          200: {
+            description: "Integrity report",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    conversationId: z.number(),
+                    healthy: z.boolean(),
+                    issues: z.array(
+                      z.object({
+                        severity: z.enum(["error", "warning"]),
+                        check: z.string(),
+                        message: z.string(),
+                        details: z.record(z.unknown()).optional(),
+                      }),
+                    ),
+                    stats: z.object({
+                      contextItems: z.number(),
+                      messages: z.number(),
+                      summaries: z.number(),
+                      largeFiles: z.number(),
+                      contextTokens: z.number(),
+                      maxTokens: z.number(),
+                      threshold: z.number(),
+                    }),
+                  }),
+                ),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      async (c) => {
+        if (!isLcmReady()) {
+          return c.json({ error: "LCM is not available" }, 400)
+        }
+        const sessionID = c.req.valid("param").sessionID
+        return jsonRequest("SessionRoutes.lcmCheckIntegrity", c, function* () {
+          const session = yield* Session.Service
+          const info = yield* session.get(sessionID)
+          const conversationId = (info as Record<string, unknown>).lcmConversationId as number | undefined
+          if (!conversationId) {
+            return { error: "Session does not have an LCM conversation" }
+          }
+          return yield* Effect.promise(() => LcmIntegrity.check(conversationId))
+        })
+      },
+    )
+    .post(
+      "/:sessionID/lcm/compact",
+      describeRoute({
+        summary: "Trigger LCM manual compaction",
+        description: "Manually trigger LCM compaction for a session, forcing summarization of the current context.",
+        operationId: "session.lcm.compact",
+        responses: {
+          200: {
+            description: "Compaction result",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    success: z.boolean(),
+                    message: z.string().optional(),
+                  }),
+                ),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      async (c) => {
+        if (!isLcmReady()) {
+          return c.json({ error: "LCM is not available" }, 400)
+        }
+        const sessionID = c.req.valid("param").sessionID
+        return jsonRequest("SessionRoutes.lcmCompact", c, function* () {
+          const session = yield* Session.Service
+          const info = yield* session.get(sessionID)
+          const conversationId = (info as Record<string, unknown>).lcmConversationId as number | undefined
+          if (!conversationId) {
+            return { success: false, message: "Session does not have an LCM conversation" }
+          }
+          const strategy = ensureLcmRuntimeStrategyConfigured()
+          yield* Effect.promise(() =>
+            strategy.compactManual({
+              sessionID,
+              conversationId,
+            }),
+          )
+          return { success: true }
+        })
+      },
     ),
 )

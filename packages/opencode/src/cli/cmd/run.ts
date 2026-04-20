@@ -299,8 +299,16 @@ export const RunCommand = cmd({
         describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
         default: false,
       })
+      .option("context-threshold", {
+        type: "number",
+        describe: "context token threshold above which LCM compaction triggers",
+      })
   },
   handler: async (args) => {
+    if (args["context-threshold"]) {
+      process.env.OPENCODE_LCM_CONTEXT_THRESHOLD = String(args["context-threshold"])
+    }
+
     let message = [...args.message, ...(args["--"] || [])]
       .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
       .join(" ")
