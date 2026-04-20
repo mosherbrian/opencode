@@ -5,7 +5,7 @@ import { isEmbeddedPostgresSupported } from "../../../src/session/lcm/embedded-p
 import { LcmContext } from "../../../src/session/lcm/context"
 import { LcmGhostCue } from "../../../src/session/lcm/ghost-cue"
 import { parseLcmPolicyConfig, setLcmPolicyConfigForTesting } from "../../../src/session/lcm/config"
-import { Token } from "../../../src/util/token"
+import { Token } from "../../../src/util"
 
 const isLcmAvailable = isEmbeddedPostgresSupported() && (await ensureLcmReady().catch(() => false))
 

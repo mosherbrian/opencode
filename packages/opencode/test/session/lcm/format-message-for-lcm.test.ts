@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { SessionPrompt } from "../../../src/session/prompt"
-import { Log } from "../../../src/util/log"
+import { Log } from "../../../src/util"
 import type { MessageV2 } from "../../../src/session/message-v2"
 
 Log.init({ print: false })
@@ -10,25 +10,25 @@ const MESSAGE_ID = "message_01"
 
 function makeUserInfo(overrides?: Partial<MessageV2.User>): MessageV2.User {
   return {
-    id: MESSAGE_ID,
-    sessionID: SESSION_ID,
+    id: MESSAGE_ID as any,
+    sessionID: SESSION_ID as any,
     role: "user",
     time: { created: Date.now() },
     agent: "default",
-    model: { providerID: "test", modelID: "test-model" },
+    model: { providerID: "test" as any, modelID: "test-model" as any },
     ...overrides,
   }
 }
 
 function makeAssistantInfo(overrides?: Partial<MessageV2.Assistant>): MessageV2.Assistant {
   return {
-    id: MESSAGE_ID,
-    sessionID: SESSION_ID,
+    id: MESSAGE_ID as any,
+    sessionID: SESSION_ID as any,
     role: "assistant",
     time: { created: Date.now() },
-    parentID: "message_00",
-    modelID: "test-model",
-    providerID: "test",
+    parentID: "message_00" as any,
+    modelID: "test-model" as any,
+    providerID: "test" as any,
     mode: "default",
     agent: "default",
     path: { cwd: "/tmp", root: "/tmp" },
@@ -38,7 +38,7 @@ function makeAssistantInfo(overrides?: Partial<MessageV2.Assistant>): MessageV2.
   }
 }
 
-function partBase(id: string): { id: string; sessionID: string; messageID: string } {
+function partBase(id: string): { id: any; sessionID: any; messageID: any } {
   return { id, sessionID: SESSION_ID, messageID: MESSAGE_ID }
 }
 

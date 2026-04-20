@@ -3,8 +3,10 @@ import { LcmDb } from "../../../src/session/lcm/db"
 import { ensureLcmReady } from "../../../src/session/lcm/runtime"
 import { isEmbeddedPostgresSupported } from "../../../src/session/lcm/embedded-postgres"
 import { LcmContext } from "../../../src/session/lcm/context"
-import { Token } from "../../../src/util/token"
-import { Session } from "../../../src/session"
+import { Token } from "../../../src/util"
+import { Effect } from "effect"
+import { AppRuntime } from "../../../src/effect/app-runtime"
+import * as Bridge from "../../../src/session/lcm/upstream-bridge"
 import { LcmGrepTool } from "../../../src/tool/lcm-grep"
 import { LcmExpandTool } from "../../../src/tool/lcm-expand"
 import { LcmDescribeTool } from "../../../src/tool/lcm-describe"
@@ -55,15 +57,16 @@ describe("session.lcm.tools", () => {
   function createMockContext(sessionID: string, options: { abort?: AbortController } = {}) {
     const abort = options.abort ?? new AbortController()
     return {
-      sessionID,
-      messageID: "msg_test_123",
+      sessionID: sessionID as any,
+      messageID: "msg_test_123" as any,
       agent: "test",
       abort: abort.signal,
       callID: "call_test_123",
       extra: {},
-      metadata: () => {},
-      ask: async () => {},
-    }
+      messages: [],
+      metadata: () => Effect.void,
+      ask: () => Effect.void,
+    } as any
   }
 
   beforeAll(async () => {
@@ -107,16 +110,16 @@ describe("session.lcm.tools", () => {
       }
 
       // Initialize tool and search for TypeScript
-      const tool = await LcmGrepTool.init()
+      const tool = await AppRuntime.runPromise(LcmGrepTool.pipe(Effect.flatMap(info => info.init())))
       const ctx = createMockContext("session_test_123")
 
-      const result = await tool.execute(
+      const result = await AppRuntime.runPromise(tool.execute(
         {
           pattern: "TypeScript",
           conversation_id: testConversationId,
         },
         ctx,
-      )
+      ))
 
       expect(result.metadata.matchCount).toBeGreaterThan(0)
       expect(result.output).toContain("TypeScript")
@@ -145,17 +148,17 @@ describe("session.lcm.tools", () => {
         tokenCount: 10,
       })
 
-      const tool = await LcmGrepTool.init()
+      const tool = await AppRuntime.runPromise(LcmGrepTool.pipe(Effect.flatMap(info => info.init())))
       const ctx = createMockContext("session_test_123")
 
       // Search for pattern matching "handle*" functions
-      const result = await tool.execute(
+      const result = await AppRuntime.runPromise(tool.execute(
         {
           pattern: "handle[A-Z][a-z]+",
           conversation_id: testConversationId,
         },
         ctx,
-      )
+      ))
 
       expect(result.metadata.matchCount).toBe(2) // handleClick and handleSubmit
       expect(result.output).toContain("handleClick")
@@ -170,16 +173,16 @@ describe("session.lcm.tools", () => {
         tokenCount: 5,
       })
 
-      const tool = await LcmGrepTool.init()
+      const tool = await AppRuntime.runPromise(LcmGrepTool.pipe(Effect.flatMap(info => info.init())))
       const ctx = createMockContext("session_test_123")
 
-      const result = await tool.execute(
+      const result = await AppRuntime.runPromise(tool.execute(
         {
           pattern: "ZZZZNOTFOUND",
           conversation_id: testConversationId,
         },
         ctx,
-      )
+      ))
 
       expect(result.metadata.matchCount).toBe(0)
       expect(result.output).toContain("No matches found")
@@ -209,16 +212,16 @@ describe("session.lcm.tools", () => {
         messageIds: messageIds.slice(0, 3),
       })
 
-      const tool = await LcmGrepTool.init()
+      const tool = await AppRuntime.runPromise(LcmGrepTool.pipe(Effect.flatMap(info => info.init())))
       const ctx = createMockContext("session_test_123")
 
-      const result = await tool.execute(
+      const result = await AppRuntime.runPromise(tool.execute(
         {
           pattern: "algorithms",
           conversation_id: testConversationId,
         },
         ctx,
-      )
+      ))
 
       expect(result.metadata.matchCount).toBeGreaterThan(0)
       // Results should show grouping by summary
@@ -241,32 +244,32 @@ describe("session.lcm.tools", () => {
         })
       }
 
-      const tool = await LcmGrepTool.init()
+      const tool = await AppRuntime.runPromise(LcmGrepTool.pipe(Effect.flatMap(info => info.init())))
       const ctx = createMockContext("session_test_123")
 
       // First page
-      const result1 = await tool.execute(
+      const result1 = await AppRuntime.runPromise(tool.execute(
         {
           pattern: "special_keyword",
           conversation_id: testConversationId,
           page: 1,
         },
         ctx,
-      )
+      ))
 
       expect(result1.metadata.page).toBe(1)
       expect(result1.metadata.matchCount).toBeGreaterThan(0)
       expect(result1.metadata.hasMore).toBe(true)
 
       // Second page
-      const result2 = await tool.execute(
+      const result2 = await AppRuntime.runPromise(tool.execute(
         {
           pattern: "special_keyword",
           conversation_id: testConversationId,
           page: 2,
         },
         ctx,
-      )
+      ))
 
       expect(result2.metadata.page).toBe(2)
     })
@@ -275,9 +278,9 @@ describe("session.lcm.tools", () => {
   describe("lcm_expand tool", () => {
     test("rejects expansion from main agent (no parentID)", async () => {
       // Mock Session.get to return a session without parentID
-      const originalGet = Session.get
+      const originalGet = Bridge.sessionGet
       // @ts-ignore - override for testing
-      Session.get = async () =>
+      Bridge.sessionGet = async () =>
         ({
           id: "session_main_123",
           parentID: undefined, // No parent = main agent
@@ -302,10 +305,10 @@ describe("session.lcm.tools", () => {
           messageIds: [messageId],
         })
 
-        const tool = await LcmExpandTool.init()
+        const tool = await AppRuntime.runPromise(LcmExpandTool.pipe(Effect.flatMap(info => info.init())))
         const ctx = createMockContext("session_main_123")
 
-        const result = await tool.execute({ summary_id: summaryId }, ctx)
+        const result = await AppRuntime.runPromise(tool.execute({ summary_id: summaryId }, ctx))
 
         // Should return an error message, not throw
         expect(result.output).toContain("ERROR: Only sub-agents can expand summaries")
@@ -313,15 +316,15 @@ describe("session.lcm.tools", () => {
         expect(result.metadata.messageCount).toBe(0)
       } finally {
         // @ts-ignore - restore for testing
-        Session.get = originalGet
+        Bridge.sessionGet = originalGet
       }
     })
 
     test("allows expansion from sub-agent (has parentID)", async () => {
       // Mock Session.get to return a session WITH parentID (sub-agent)
-      const originalGet = Session.get
+      const originalGet = Bridge.sessionGet
       // @ts-ignore - override for testing
-      Session.get = async () =>
+      Bridge.sessionGet = async () =>
         ({
           id: "session_child_123",
           parentID: "session_parent_123", // Has parent = sub-agent
@@ -351,10 +354,10 @@ describe("session.lcm.tools", () => {
           messageIds,
         })
 
-        const tool = await LcmExpandTool.init()
+        const tool = await AppRuntime.runPromise(LcmExpandTool.pipe(Effect.flatMap(info => info.init())))
         const ctx = createMockContext("session_child_123")
 
-        const result = await tool.execute({ summary_id: summaryId }, ctx)
+        const result = await AppRuntime.runPromise(tool.execute({ summary_id: summaryId }, ctx))
 
         // Should successfully expand
         expect(result.metadata.messageCount).toBe(3)
@@ -367,15 +370,15 @@ describe("session.lcm.tools", () => {
         expect(result.output).toContain("Expanded summary")
       } finally {
         // @ts-ignore - restore for testing
-        Session.get = originalGet
+        Bridge.sessionGet = originalGet
       }
     })
 
     test("handles summary not found error", async () => {
       // Mock Session.get to return a sub-agent session
-      const originalGet = Session.get
+      const originalGet = Bridge.sessionGet
       // @ts-ignore - override for testing
-      Session.get = async () =>
+      Bridge.sessionGet = async () =>
         ({
           id: "session_child_456",
           parentID: "session_parent_456",
@@ -383,14 +386,14 @@ describe("session.lcm.tools", () => {
         }) as any
 
       try {
-        const tool = await LcmExpandTool.init()
+        const tool = await AppRuntime.runPromise(LcmExpandTool.pipe(Effect.flatMap(info => info.init())))
         const ctx = createMockContext("session_child_456")
 
         // Try to expand non-existent summary
-        await expect(tool.execute({ summary_id: "sum_nonexistent_id_12345" }, ctx)).rejects.toThrow()
+        await expect(AppRuntime.runPromise(tool.execute({ summary_id: "sum_nonexistent_id_12345" }, ctx))).rejects.toThrow()
       } finally {
         // @ts-ignore - restore for testing
-        Session.get = originalGet
+        Bridge.sessionGet = originalGet
       }
     })
   })
@@ -436,9 +439,9 @@ describe("session.lcm.tools", () => {
         pointers: [{ pointsToSummaryId: bindleSummaryId, pointerKind: "archive_stub" }],
       })
 
-      const tool = await LcmDescribeTool.init()
+      const tool = await AppRuntime.runPromise(LcmDescribeTool.pipe(Effect.flatMap(info => info.init())))
       const ctx = createMockContext("session_test_123")
-      const result = await tool.execute({ id: archiveStubId }, ctx)
+      const result = await AppRuntime.runPromise(tool.execute({ id: archiveStubId }, ctx))
 
       expect(result.metadata.type).toBe("summary")
       expect(result.metadata.summaryType).toBe("archive_stub")
@@ -461,9 +464,9 @@ describe("session.lcm.tools", () => {
      */
     test("creates multiple summaries and expands to retrieve original data", async () => {
       // Mock Session.get to simulate a sub-agent (has parentID)
-      const originalGet = Session.get
+      const originalGet = Bridge.sessionGet
       // @ts-ignore - override for testing
-      Session.get = async () =>
+      Bridge.sessionGet = async () =>
         ({
           id: "session_subagent_multi",
           parentID: "session_parent_multi",
@@ -543,26 +546,26 @@ describe("session.lcm.tools", () => {
 
         // Phase 4: Use lcm_grep to search for specific content
         console.log("Testing lcm_grep search...")
-        const grepTool = await LcmGrepTool.init()
+        const grepTool = await AppRuntime.runPromise(LcmGrepTool.pipe(Effect.flatMap(info => info.init())))
         const grepCtx = createMockContext("session_subagent_multi")
 
-        const grepResult = await grepTool.execute(
+        const grepResult = await AppRuntime.runPromise(grepTool.execute(
           {
             pattern: "UNIQUE_ID_005",
             conversation_id: testConversationId,
           },
           grepCtx,
-        )
+        ))
 
         expect(grepResult.metadata.matchCount).toBeGreaterThan(0)
         expect(grepResult.output).toContain("UNIQUE_ID_005")
 
         // Phase 5: Use lcm_expand to retrieve original messages from a sprig summary
         console.log("Testing lcm_expand on sprig summary...")
-        const expandTool = await LcmExpandTool.init()
+        const expandTool = await AppRuntime.runPromise(LcmExpandTool.pipe(Effect.flatMap(info => info.init())))
         const expandCtx = createMockContext("session_subagent_multi")
 
-        const expandResult = await expandTool.execute({ summary_id: summary1Id }, expandCtx)
+        const expandResult = await AppRuntime.runPromise(expandTool.execute({ summary_id: summary1Id }, expandCtx))
 
         expect(expandResult.metadata.messageCount).toBe(10)
         expect(expandResult.output).toContain("UNIQUE_ID_000")
@@ -571,7 +574,7 @@ describe("session.lcm.tools", () => {
 
         // Phase 6: Expand the bindle summary to get all 30 messages
         console.log("Testing lcm_expand on bindle summary...")
-        const expandCondensedResult = await expandTool.execute({ summary_id: condensedId }, expandCtx)
+        const expandCondensedResult = await AppRuntime.runPromise(expandTool.execute({ summary_id: condensedId }, expandCtx))
 
         // Condensed summary should expand to all 30 original messages
         expect(expandCondensedResult.metadata.messageCount).toBe(30)
@@ -589,7 +592,7 @@ describe("session.lcm.tools", () => {
         console.log(`  - Condensed expand returned ${expandCondensedResult.metadata.messageCount} messages`)
       } finally {
         // @ts-ignore - restore for testing
-        Session.get = originalGet
+        Bridge.sessionGet = originalGet
       }
     })
   })

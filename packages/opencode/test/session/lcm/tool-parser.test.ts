@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { SessionPrompt } from "../../../src/session/prompt"
-import { Log } from "../../../src/util/log"
+import { Log } from "../../../src/util"
 
 Log.init({ print: false })
 

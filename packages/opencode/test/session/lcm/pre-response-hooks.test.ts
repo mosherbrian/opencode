@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { ModelMessage } from "ai"
 import { SessionPrompt } from "../../../src/session/prompt"
 import type { LcmRetrieval } from "../../../src/session/lcm/retrieval"
-import { Log } from "../../../src/util/log"
+import { Log } from "../../../src/util"
 
 Log.init({ print: false })
 

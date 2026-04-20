@@ -1,19 +1,22 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
 import Ajv2020 from "ajv/dist/2020"
+import { Effect } from "effect"
 import { AgenticMapTool, stableStringify, buildSystemMessage, buildUserMessage } from "../../src/tool/agentic-map"
 import { Instance } from "../../src/project/instance"
+import { AppRuntime } from "../../src/effect/app-runtime"
 import { tmpdir } from "../fixture/fixture"
 
 const ctx = {
-  sessionID: "test",
-  messageID: "",
+  sessionID: "test" as any,
+  messageID: "" as any,
   callID: "",
   agent: "build",
   abort: AbortSignal.any([]),
-  metadata: () => {},
-  ask: async () => {},
-}
+  messages: [],
+  metadata: () => Effect.void,
+  ask: () => Effect.void,
+} as any
 
 // ---------------------------------------------------------------------------
 // stableStringify
@@ -218,7 +221,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         await expect(tool.execute(makeParams({ output_schema: { type: 123 } }), ctx)).rejects.toThrow(
           "not a valid JSON Schema",
         )
@@ -231,7 +234,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         await expect(
           tool.execute(
             makeParams({
@@ -255,7 +258,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         await expect(
           tool.execute(
             makeParams({
@@ -279,7 +282,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         await expect(
           tool.execute(
             makeParams({
@@ -303,7 +306,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         const requests: Array<Record<string, unknown>> = []
         const testCtx = {
           ...ctx,
@@ -312,15 +315,13 @@ describe("agentic_map execute", () => {
           },
         }
         // Will fail after JSONL parsing (at MessageV2.get), but that's OK
-        await tool
-          .execute(
+        await AppRuntime.runPromise(tool.execute(
             makeParams({
               input_path: path.join(tmp.path, "input.jsonl"),
               output_path: path.join(tmp.path, "output.jsonl"),
             }),
             testCtx,
-          )
-          .catch(() => {})
+          )).catch(() => {})
 
         // Task permission confirms JSONL parsed 2 items
         const taskReq = requests.find((r) => r.permission === "task")
@@ -340,7 +341,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         const requests: Array<Record<string, unknown>> = []
         const testCtx = {
           ...ctx,
@@ -348,15 +349,13 @@ describe("agentic_map execute", () => {
             requests.push(req)
           },
         }
-        await tool
-          .execute(
+        await AppRuntime.runPromise(tool.execute(
             makeParams({
               input_path: path.join(tmp.path, "input.jsonl"),
               output_path: path.join(tmp.path, "output.jsonl"),
             }),
             testCtx,
-          )
-          .catch(() => {})
+          )).catch(() => {})
 
         const taskReq = requests.find((r) => r.permission === "task")
         expect(taskReq).toBeDefined()
@@ -375,7 +374,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         const requests: Array<Record<string, unknown>> = []
         const testCtx = {
           ...ctx,
@@ -383,15 +382,13 @@ describe("agentic_map execute", () => {
             requests.push(req)
           },
         }
-        await tool
-          .execute(
+        await AppRuntime.runPromise(tool.execute(
             makeParams({
               input_path: path.join(tmp.path, "input.jsonl"),
               output_path: path.join(tmp.path, "output.jsonl"),
             }),
             testCtx,
-          )
-          .catch(() => {})
+          )).catch(() => {})
 
         const readReq = requests.find((r) => r.permission === "read")
         expect(readReq).toBeDefined()
@@ -417,7 +414,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         const requests: Array<Record<string, unknown>> = []
         const testCtx = {
           ...ctx,
@@ -425,15 +422,13 @@ describe("agentic_map execute", () => {
             requests.push(req)
           },
         }
-        await tool
-          .execute(
+        await AppRuntime.runPromise(tool.execute(
             makeParams({
               input_path: path.join(outerTmp.path, "input.jsonl"),
               output_path: path.join(outerTmp.path, "output.jsonl"),
             }),
             testCtx,
-          )
-          .catch(() => {})
+          )).catch(() => {})
 
         const extReqs = requests.filter((r) => r.permission === "external_directory")
         expect(extReqs.length).toBeGreaterThanOrEqual(1)
@@ -451,7 +446,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         // The tool proceeds past JSONL parsing with defaults applied.
         // We verify it doesn't throw for missing optional params.
         const requests: Array<Record<string, unknown>> = []
@@ -461,16 +456,14 @@ describe("agentic_map execute", () => {
             requests.push(req)
           },
         }
-        await tool
-          .execute(
+        await AppRuntime.runPromise(tool.execute(
             makeParams({
               input_path: path.join(tmp.path, "input.jsonl"),
               output_path: path.join(tmp.path, "output.jsonl"),
               // concurrency, timeout_seconds, max_attempts intentionally omitted
             }),
             testCtx,
-          )
-          .catch(() => {})
+          )).catch(() => {})
 
         // If we reached the task permission, defaults were applied without error
         const taskReq = requests.find((r) => r.permission === "task")
@@ -490,7 +483,7 @@ describe("agentic_map execute", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const tool = await AgenticMapTool.init()
+        const tool = await AppRuntime.runPromise(AgenticMapTool.pipe(Effect.flatMap(info => info.init())))
         const requests: Array<Record<string, unknown>> = []
         const testCtx = {
           ...ctx,
@@ -498,15 +491,13 @@ describe("agentic_map execute", () => {
             requests.push(req)
           },
         }
-        await tool
-          .execute(
+        await AppRuntime.runPromise(tool.execute(
             makeParams({
               input_path: path.join(tmp.path, "input.jsonl"),
               output_path: path.join(tmp.path, "output.jsonl"),
             }),
             testCtx,
-          )
-          .catch(() => {})
+          )).catch(() => {})
 
         const taskReq = requests.find((r) => r.permission === "task")
         expect(taskReq).toBeDefined()

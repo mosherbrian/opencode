@@ -2,7 +2,7 @@ import { describe, expect, test, beforeAll, afterAll, mock } from "bun:test"
 import { LargeFileThreshold } from "../../../src/session/lcm/large-file-threshold"
 import { LargeFile } from "../../../src/session/lcm/large-file"
 import { ExploreDispatcher } from "../../../src/session/lcm/explore/dispatcher"
-import { Provider } from "../../../src/provider/provider"
+import { Provider } from "../../../src/provider"
 
 describe("session.lcm.file-picker-large-file", () => {
   describe("LargeFileThreshold integration", () => {
@@ -134,8 +134,8 @@ describe("session.lcm.file-picker-large-file", () => {
     // the file type detection logic via extension patterns
 
     const mockModel = {
-      id: "test-model",
-      providerID: "test",
+      id: "test-model" as any,
+      providerID: "test" as any,
       name: "Test Model",
       api: { id: "test", url: "http://test", npm: "@ai-sdk/openai" },
       capabilities: {
@@ -153,7 +153,7 @@ describe("session.lcm.file-picker-large-file", () => {
       options: {},
       headers: {},
       release_date: "2024-01-01",
-    }
+    } as any
 
     test("detects JSON files from extension", async () => {
       const content = JSON.stringify({ key: "value" }, null, 2)

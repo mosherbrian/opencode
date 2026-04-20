@@ -81,4 +81,20 @@ export const layer = Layer.effect(
 
 export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer))
 
+/**
+ * Returns LCM-related system prompt sections, including tool descriptions.
+ * Used to verify that LCM tools are registered and visible in the system prompt.
+ */
+export async function lcm(): Promise<string[]> {
+  const ToolRegistry = await import("../tool/registry")
+  const { AppRuntime } = await import("../effect/app-runtime")
+  const ids = await AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      return yield* registry.ids()
+    }),
+  )
+  return ids.filter((id) => id.startsWith("lcm_")).map((id) => `tool: ${id}`)
+}
+
 export * as SystemPrompt from "./system"

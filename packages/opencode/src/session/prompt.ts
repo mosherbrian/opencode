@@ -187,7 +187,7 @@ export async function getLcmConversationId(sessionID: string): Promise<number | 
  * Format a session message (with parts) into LCM-compatible structure.
  * Produces a content string and structured parts array for database storage.
  */
-function formatMessageForLcm(msg: MessageV2.WithParts): {
+export function formatMessageForLcm(msg: MessageV2.WithParts): {
   role: LcmDb.MessageRole
   content: string
   tokenCount: number
@@ -373,7 +373,7 @@ function mapLcmRoleToModel(role: string): "user" | "assistant" {
 /**
  * Parse <tool> XML tags from LCM content and extract tool call information.
  */
-function parseToolTagsFromLcm(content: string): {
+export function parseToolTagsFromLcm(content: string): {
   name: string
   input: unknown
   output: string
@@ -441,7 +441,7 @@ function parseToolTagsFromLcm(content: string): {
 /**
  * Strip all <tool name="...">...</tool> tags from content.
  */
-function stripToolTagsFromLcm(content: string): string {
+export function stripToolTagsFromLcm(content: string): string {
   const ranges: { start: number; end: number }[] = []
   const openTagPattern = /<tool name="[^"]+">[\s]*/g
   let openMatch
@@ -477,7 +477,7 @@ function stripToolTagsFromLcm(content: string): string {
 /**
  * Strip LCM-only markers that aren't tool tags but shouldn't appear in text parts.
  */
-function stripLcmMarkers(content: string): string {
+export function stripLcmMarkers(content: string): string {
   return content
     .replace(/\[Patch:[^\]]*\]/g, "")
     .replace(/<file\s+path="[^"]*"\s+mime="[^"]*"\s*\/>/g, "")
@@ -527,7 +527,7 @@ function collectActiveSummaryIdsFromContext(
 /**
  * Format retrieval hits into ultra-short pre-response memory cue lines.
  */
-function formatPreResponseMemoryCueBlock(input: {
+export function formatPreResponseMemoryCueBlock(input: {
   hits: LcmRetrieval.QueryHit[]
   activeSummaryIds: Iterable<string>
   topK?: number
@@ -552,7 +552,7 @@ function formatPreResponseMemoryCueBlock(input: {
 /**
  * Insert the cue block before the latest user message so the current query remains last.
  */
-function injectPreResponseMemoryCueBlock(
+export function injectPreResponseMemoryCueBlock(
   messages: Array<{ role: string; content: any }>,
   cueBlock: string | null,
 ): Array<{ role: string; content: any }> {

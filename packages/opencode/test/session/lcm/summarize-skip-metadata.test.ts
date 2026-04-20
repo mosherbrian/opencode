@@ -20,12 +20,12 @@ function makeMessage(
   if (role === "user") {
     return {
       info: {
-        id,
-        sessionID,
+        id: id as any,
+        sessionID: sessionID as any,
         role: "user",
         time: { created: Date.now() },
         agent: "default",
-        model: { providerID: "test", modelID: "test-model" },
+        model: { providerID: "test" as any, modelID: "test-model" as any },
       },
       parts,
     }
@@ -33,13 +33,13 @@ function makeMessage(
 
   return {
     info: {
-      id,
-      sessionID,
+      id: id as any,
+      sessionID: sessionID as any,
       role: "assistant",
       time: { created: Date.now() },
-      parentID: "msg_parent",
-      modelID: "test-model",
-      providerID: "test",
+      parentID: "msg_parent" as any,
+      modelID: "test-model" as any,
+      providerID: "test" as any,
       mode: "normal",
       agent: "default",
       path: { cwd: "/tmp", root: "/tmp" },
@@ -55,7 +55,7 @@ function makeMessage(
   }
 }
 
-function partBase(messageID?: string): { id: string; sessionID: string; messageID: string } {
+function partBase(messageID?: string): { id: any; sessionID: any; messageID: any } {
   return {
     id: "part_" + Math.random().toString(36).slice(2, 10),
     sessionID: "ses_test1",

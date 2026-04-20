@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import { Instance } from "../../../src/project/instance"
-import { ToolRegistry } from "../../../src/tool/registry"
+import { ToolRegistry } from "../../../src/tool"
 import { SystemPrompt } from "../../../src/session/system"
+import { AppRuntime } from "../../../src/effect/app-runtime"
 import { tmpdir } from "../../fixture/fixture"
 import { ensureLcmReady } from "../../../src/session/lcm/runtime"
 import { isEmbeddedPostgresSupported } from "../../../src/session/lcm/embedded-postgres"
@@ -19,7 +21,12 @@ describe("session.lcm.availability", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const ids = await ToolRegistry.ids()
+        const ids = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const registry = yield* ToolRegistry.Service
+            return yield* registry.ids()
+          }),
+        )
         const toolListText = ids.join(", ")
         expect(toolListText).toContain("lcm_grep")
         expect(toolListText).toContain("lcm_expand")

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { LcmMigration } from "../../../src/session/lcm/migration"
-import { Log } from "../../../src/util/log"
+import { Log } from "../../../src/util"
 import type { MessageV2 } from "../../../src/session/message-v2"
 
 Log.init({ print: false })
@@ -8,18 +8,18 @@ Log.init({ print: false })
 const SESSION_ID = "ses_test000000000000000000"
 const MESSAGE_ID = "msg_test000000000000000000"
 
-function makeBase(id: string) {
+function makeBase(id: string): { id: any; sessionID: any; messageID: any } {
   return { id, sessionID: SESSION_ID, messageID: MESSAGE_ID }
 }
 
 function makeUserInfo(): MessageV2.User {
   return {
-    id: MESSAGE_ID,
-    sessionID: SESSION_ID,
+    id: MESSAGE_ID as any,
+    sessionID: SESSION_ID as any,
     role: "user",
     time: { created: Date.now() },
     agent: "default",
-    model: { providerID: "test", modelID: "test-model" },
+    model: { providerID: "test" as any, modelID: "test-model" as any },
   }
 }
 
