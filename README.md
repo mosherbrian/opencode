@@ -1,3 +1,113 @@
+# LCM Fork — Lossless Context Management
+
+## What this fork adds
+
+This is a fork of [OpenCode](https://github.com/anomalyco/opencode) with **Lossless Context Management (LCM)** patches from [Volt](https://github.com/Martian-Engineering/volt). LCM replaces OpenCode's session compaction with a Postgres-backed DAG of message summaries, enabling infinite coding sessions without context window limits.
+
+### Key additions:
+- 66 core LCM files (embedded Postgres, summary DAG, retrieval, file exploration)
+- 8 new tools (lcm-describe, lcm-expand, lcm-expand-query, lcm-grep, lcm-read, agentic-map, llm-map)
+- Security hardening (telemetry, share, auto-update disabled by default)
+- Designed for air-gapped/on-prem deployment with local LLMs
+
+## Deployment
+
+### Prerequisites
+- Bun (JS runtime)
+- Git
+- A local LLM server (OpenAI-compatible endpoint, e.g., llama-swap)
+
+### Quick Start (Windows)
+```powershell
+git clone -b lcm https://github.com/mosherbrian/opencode.git
+cd opencode
+bun install
+bun run build
+```
+
+Then configure `%APPDATA%\opencode\opencode.jsonc`:
+```jsonc
+{
+  "provider": {
+    "local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://<server-ip>:8080/v1",
+        "apiKey": "local"
+      },
+      "models": {
+        "qwen3.6-35b-vulkan-nothink": {
+          "name": "Qwen3.6-35B-A3B (nothink)",
+          "attachment": true
+        }
+      }
+    }
+  },
+  "model": "local/qwen3.6-35b-vulkan-nothink",
+  "share": "disabled",
+  "autoupdate": false
+}
+```
+
+### Security Environment Variables
+For air-gapped deployment, these are defaulted to disabled in this fork. To explicitly set:
+```
+OPENCODE_DISABLE_SHARE=true
+OPENCODE_DISABLE_AUTOUPDATE=true
+OPENCODE_DISABLE_MODELS_FETCH=true
+VOLTCODE_DISABLE_SHARE=true
+VOLTCODE_DISABLE_AUTOUPDATE=true
+VOLTCODE_DISABLE_MODELS_FETCH=true
+VOLTCODE_DISABLE_LSP_DOWNLOAD=true
+```
+
+### Automated Setup (Windows PowerShell)
+A setup script is available at https://github.com/mosherbrian/ai-notes (branch gfx1151-runtime-patches):
+```powershell
+.\opencode-lcm-setup.ps1 -BosgameIP <server-ip>
+```
+
+## Keeping in Sync with Upstream
+
+This branch maintains a 7-commit patch series on top of upstream OpenCode. To sync:
+
+```bash
+git fetch upstream  # upstream = anomalyco/opencode
+git checkout lcm
+git rebase upstream/dev
+# Resolve conflicts (most likely in packages/opencode/src/session/prompt.ts)
+git push origin lcm --force-with-lease
+git tag lcm-vN-base $(git merge-base lcm upstream/dev)
+```
+
+### Patch series structure (designed for clean rebasing):
+1. **Core LCM engine** — 66 new files, no conflicts
+2. **LCM tools** — 70 new files, no conflicts
+3. **Wire into session lifecycle** — patches bootstrap.ts, session.ts, compaction.ts
+4. **Integrate into prompt building** — patches prompt.ts (MOST LIKELY TO CONFLICT)
+5. **Register tools and wire config** — patches registry.ts, read.ts, agent.ts, config.ts, flag.ts
+6. **CLI and server integration** — patches routes, TUI thread, CLI commands
+7. **Security hardening** — disables telemetry/share/autoupdate defaults
+
+### Conflict hotspots
+| File | Why | Frequency |
+|------|-----|-----------|
+| session/prompt.ts | LCM interleaved with message loop | High |
+| tool/registry.ts | Tool list changes | Medium |
+| tool/read.ts | Large file threshold | Low |
+| config/config.ts | Schema additions | Low |
+
+## Infrastructure
+
+This fork is used with:
+- **3x Bosgame mini-PCs** (AMD Strix Halo, 128GB, Fedora Kinoite)
+- **Qwen3.6-35B-A3B** at 56 tok/s via llama-swap + Vulkan
+- **Claude Code** also works with the same servers via `ANTHROPIC_BASE_URL`
+
+---
+
+<!-- Upstream OpenCode README below -->
+
 <p align="center">
   <a href="https://opencode.ai">
     <picture>
