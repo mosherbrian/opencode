@@ -1,0 +1,547 @@
+import postgres from "postgres"
+import { Log } from "@/util/log"
+import { LCM_DATABASE_URL, LCM_EXTERNAL_DATABASE } from "./config"
+
+/**
+ * User context for multi-tenant LCM database isolation.
+ *
+ * When running in cloud mode (LCM_EXTERNAL_DATABASE=true), each user gets their
+ * own PostgreSQL schema containing all LCM tables. This provides complete data
+ * isolation without modifying existing queries.
+ *
+ * Schema naming: user_{sanitized_user_id}
+ *
+ * For local development (embedded postgres), no user isolation is applied.
+ */
+
+const log = Log.create({ service: "lcm.user-context" })
+
+// Cache of initialized user schemas
+const initializedSchemas = new Set<string>()
+
+// Current user context (thread-local style, set per request)
+let currentUserId: string | null = null
+
+/**
+ * Sanitize user ID for use as PostgreSQL schema name.
+ * Only allows alphanumeric and underscores, max 63 chars.
+ */
+function sanitizeSchemaName(userId: string): string {
+  // Hash long user IDs or those with special characters
+  const sanitized = userId
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "_")
+    .slice(0, 50)
+  return `user_${sanitized}`
+}
+
+/**
+ * Get the schema name for a user ID.
+ */
+export function getUserSchema(userId: string): string {
+  return sanitizeSchemaName(userId)
+}
+
+/**
+ * Set the current user context for database operations.
+ * Call this at the start of each request before any LCM operations.
+ */
+export function setCurrentUser(userId: string | null): void {
+  currentUserId = userId
+  if (userId) {
+    log.debug("set user context", { userId, schema: getUserSchema(userId) })
+  }
+}
+
+/**
+ * Get the current user ID, or null if not in multi-tenant mode.
+ */
+export function getCurrentUser(): string | null {
+  // Only return user ID in external database mode
+  if (!LCM_EXTERNAL_DATABASE) return null
+  return currentUserId
+}
+
+/**
+ * Get the schema name for the current user, or "public" if not in multi-tenant mode.
+ */
+export function getCurrentSchema(): string {
+  const userId = getCurrentUser()
+  if (!userId) return "public"
+  return getUserSchema(userId)
+}
+
+/**
+ * SQL to set the search_path to the user's schema for a connection.
+ */
+export function getSearchPathSql(): string {
+  const schema = getCurrentSchema()
+  return `SET search_path TO ${schema}, public`
+}
+
+/**
+ * Check if a user's schema has been initialized.
+ */
+export function isSchemaInitialized(userId: string): boolean {
+  return initializedSchemas.has(getUserSchema(userId))
+}
+
+/**
+ * Mark a user's schema as initialized.
+ */
+export function markSchemaInitialized(userId: string): void {
+  initializedSchemas.add(getUserSchema(userId))
+}
+
+/**
+ * Create a user's schema if it doesn't exist.
+ * Also creates all required LCM tables within the schema.
+ */
+export async function ensureUserSchema(conn: postgres.Sql, userId: string): Promise<void> {
+  const schema = getUserSchema(userId)
+
+  if (initializedSchemas.has(schema)) {
+    return
+  }
+
+  log.info("creating user schema", { userId, schema })
+
+  // Create schema if not exists
+  await conn.unsafe(`CREATE SCHEMA IF NOT EXISTS ${schema}`)
+
+  // Set search path to new schema
+  await conn.unsafe(`SET search_path TO ${schema}, public`)
+
+  // Create all tables within this schema using the same migrations
+  // The types (enums) are in public schema and shared across all users
+  await conn.unsafe(`
+    -- Ensure enums exist in public schema (shared)
+    DO $$ BEGIN
+      CREATE TYPE message_role AS ENUM ('system','user','assistant','tool');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+    DO $$ BEGIN
+      CREATE TYPE summary_kind AS ENUM ('sprig','bindle');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+    DO $$ BEGIN
+      ALTER TYPE summary_kind RENAME VALUE 'leaf' TO 'sprig';
+    EXCEPTION
+      WHEN undefined_object THEN NULL;
+      WHEN invalid_parameter_value THEN NULL;
+    END $$;
+
+    DO $$ BEGIN
+      ALTER TYPE summary_kind RENAME VALUE 'condensed' TO 'bindle';
+    EXCEPTION
+      WHEN undefined_object THEN NULL;
+      WHEN invalid_parameter_value THEN NULL;
+    END $$;
+
+    DO $$ BEGIN
+      CREATE TYPE context_item_type AS ENUM ('message','summary');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+    -- 1) Conversations (store per-session config)
+    CREATE TABLE IF NOT EXISTS conversations (
+      conversation_id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      title                text,
+      model_name           text NOT NULL,
+      model_ctx_max_tokens integer NOT NULL,
+      ctx_cutoff_threshold numeric(5,4) NOT NULL DEFAULT 0.6000,
+      parent_conversation_id bigint REFERENCES conversations(conversation_id) ON DELETE SET NULL,
+      created_at           timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS conversations_parent_idx ON conversations(parent_conversation_id);
+
+    -- 2) Full-fidelity messages (never deleted)
+    CREATE TABLE IF NOT EXISTS messages (
+      message_id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      conversation_id bigint NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+      seq             bigint NOT NULL,
+      role            public.message_role NOT NULL,
+      content         text NOT NULL,
+      token_count     integer NOT NULL,
+      created_at      timestamptz NOT NULL DEFAULT now(),
+      content_tsv     tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+      UNIQUE (conversation_id, seq)
+    );
+
+    CREATE INDEX IF NOT EXISTS messages_conv_seq_idx ON messages(conversation_id, seq);
+    CREATE INDEX IF NOT EXISTS messages_tsv_gin_idx ON messages USING GIN (content_tsv);
+
+    -- 3) Summaries (deterministic string IDs)
+    CREATE TABLE IF NOT EXISTS summaries (
+      summary_id      text PRIMARY KEY,
+      conversation_id bigint NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+      kind            public.summary_kind NOT NULL,
+      summary_level   text NOT NULL DEFAULT 'd1',
+      condensation_order integer NOT NULL DEFAULT 1,
+      summary_type    text NOT NULL DEFAULT 'sprig',
+      content         text NOT NULL,
+      token_count     integer NOT NULL,
+      file_ids        jsonb NOT NULL DEFAULT '[]',
+      qmd_doc_id      text,
+      qmd_doc_version integer,
+      is_off_context  boolean NOT NULL DEFAULT false,
+      created_at      timestamptz NOT NULL DEFAULT now(),
+      content_tsv     tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+      CONSTRAINT summaries_summary_level_check CHECK (summary_level ~ '^d[1-9][0-9]*$'),
+      CONSTRAINT summaries_condensation_order_check CHECK (condensation_order >= 1),
+      CONSTRAINT summaries_summary_type_check CHECK (summary_type IN ('sprig', 'bindle', 'archive_stub')),
+      CONSTRAINT summaries_qmd_doc_version_nonnegative_check CHECK (qmd_doc_version IS NULL OR qmd_doc_version >= 0)
+    );
+
+    CREATE INDEX IF NOT EXISTS summaries_conv_created_idx ON summaries(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS summaries_tsv_gin_idx ON summaries USING GIN (content_tsv);
+    DO $$ BEGIN
+      ALTER TABLE summaries ADD COLUMN summary_level text NOT NULL DEFAULT 'd1';
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries ADD COLUMN condensation_order integer NOT NULL DEFAULT 1;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries ADD COLUMN summary_type text NOT NULL DEFAULT 'sprig';
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries ADD COLUMN qmd_doc_id text;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries ADD COLUMN qmd_doc_version integer;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries ADD COLUMN is_off_context boolean NOT NULL DEFAULT false;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries DROP CONSTRAINT IF EXISTS summaries_summary_level_check;
+    EXCEPTION WHEN undefined_object THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries DROP CONSTRAINT IF EXISTS summaries_condensation_order_check;
+    EXCEPTION WHEN undefined_object THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries DROP CONSTRAINT IF EXISTS summaries_summary_type_check;
+    EXCEPTION WHEN undefined_object THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries
+        ADD CONSTRAINT summaries_qmd_doc_version_nonnegative_check
+        CHECK (qmd_doc_version IS NULL OR qmd_doc_version >= 0);
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    UPDATE summaries
+    SET condensation_order = CASE
+          WHEN condensation_order IS NOT NULL AND condensation_order >= 1 THEN condensation_order
+          WHEN summary_level = 'sprig' THEN 1
+          WHEN summary_level = 'bindle' THEN 2
+          WHEN summary_level ~ '^d[1-9][0-9]*$' THEN substring(summary_level from '^d([1-9][0-9]*)$')::integer
+          WHEN kind = 'bindle'::public.summary_kind THEN 2
+          ELSE 1
+        END,
+        summary_level = 'd' || CASE
+          WHEN condensation_order IS NOT NULL AND condensation_order >= 1 THEN condensation_order::text
+          WHEN summary_level = 'sprig' THEN '1'
+          WHEN summary_level = 'bindle' THEN '2'
+          WHEN summary_level ~ '^d[1-9][0-9]*$' THEN substring(summary_level from '^d([1-9][0-9]*)$')
+          WHEN kind = 'bindle'::public.summary_kind THEN '2'
+          ELSE '1'
+        END,
+        summary_type = CASE
+          WHEN summary_type IN ('sprig', 'bindle', 'archive_stub') THEN summary_type
+          WHEN kind = 'bindle'::public.summary_kind THEN 'bindle'
+          ELSE 'sprig'
+        END
+    WHERE condensation_order IS NULL
+       OR summary_type IS NULL
+       OR summary_level IS NULL
+       OR summary_level !~ '^d[1-9][0-9]*$'
+       OR condensation_order < 1
+       OR summary_type NOT IN ('sprig', 'bindle', 'archive_stub')
+       OR (summary_type = 'sprig' AND condensation_order <> 1);
+    DO $$ BEGIN
+      ALTER TABLE summaries ALTER COLUMN condensation_order SET NOT NULL;
+    EXCEPTION WHEN others THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries
+      ADD CONSTRAINT summaries_summary_level_check
+      CHECK (summary_level ~ '^d[1-9][0-9]*$');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries
+      ADD CONSTRAINT summaries_condensation_order_check
+      CHECK (condensation_order >= 1);
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE summaries
+      ADD CONSTRAINT summaries_summary_type_check
+      CHECK (summary_type IN ('sprig', 'bindle', 'archive_stub'));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    CREATE INDEX IF NOT EXISTS summaries_off_context_idx ON summaries (is_off_context, condensation_order, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS summaries_qmd_doc_id_uq ON summaries (qmd_doc_id) WHERE qmd_doc_id IS NOT NULL;
+
+    -- 4) Sprig summaries -> messages (ordered)
+    CREATE TABLE IF NOT EXISTS summary_messages (
+      summary_id text   NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
+      message_id bigint NOT NULL REFERENCES messages(message_id) ON DELETE RESTRICT,
+      ord        integer NOT NULL,
+      PRIMARY KEY (summary_id, ord),
+      UNIQUE (summary_id, message_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS summary_messages_message_idx ON summary_messages(message_id);
+
+    -- 5) Bindle summaries -> parent summaries (ordered, high fan-out DAG)
+    CREATE TABLE IF NOT EXISTS summary_parents (
+      summary_id        text NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
+      parent_summary_id text NOT NULL REFERENCES summaries(summary_id) ON DELETE RESTRICT,
+      ord               integer NOT NULL,
+      PRIMARY KEY (summary_id, ord),
+      UNIQUE (summary_id, parent_summary_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS summary_parents_parent_idx ON summary_parents(parent_summary_id);
+
+    -- 5b) Archive/stub lineage pointers for bindle traversal
+    CREATE TABLE IF NOT EXISTS summary_lineage_pointers (
+      summary_id            text NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
+      points_to_summary_id  text NOT NULL REFERENCES summaries(summary_id) ON DELETE CASCADE,
+      pointer_kind          text NOT NULL,
+      ord                   integer NOT NULL DEFAULT 1,
+      created_at            timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (summary_id, pointer_kind, points_to_summary_id),
+      CONSTRAINT summary_lineage_no_self_pointer CHECK (summary_id <> points_to_summary_id),
+      CONSTRAINT summary_lineage_pointer_kind_not_empty CHECK (length(pointer_kind) > 0),
+      CONSTRAINT summary_lineage_ord_positive CHECK (ord > 0)
+    );
+
+    CREATE INDEX IF NOT EXISTS summary_lineage_points_to_idx ON summary_lineage_pointers(points_to_summary_id);
+    CREATE INDEX IF NOT EXISTS summary_lineage_summary_ord_idx ON summary_lineage_pointers(summary_id, ord);
+
+    -- 6) Current context (ordered list of message+summary items)
+    CREATE TABLE IF NOT EXISTS context_items (
+      conversation_id bigint NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+      position        integer NOT NULL,
+      item_type       public.context_item_type NOT NULL,
+      message_id      bigint,
+      summary_id      text,
+
+      PRIMARY KEY (conversation_id, position),
+
+      CONSTRAINT ctx_item_exactly_one_ref CHECK (
+        (item_type = 'message'::public.context_item_type AND message_id IS NOT NULL AND summary_id IS NULL) OR
+        (item_type = 'summary'::public.context_item_type AND summary_id IS NOT NULL AND message_id IS NULL)
+      ),
+
+      FOREIGN KEY (message_id) REFERENCES messages(message_id) ON DELETE RESTRICT,
+      FOREIGN KEY (summary_id) REFERENCES summaries(summary_id) ON DELETE RESTRICT
+    );
+
+    CREATE INDEX IF NOT EXISTS ctx_items_conv_pos_idx ON context_items(conversation_id, position);
+    CREATE INDEX IF NOT EXISTS ctx_items_summary_idx ON context_items(summary_id);
+    CREATE INDEX IF NOT EXISTS ctx_items_message_idx ON context_items(message_id);
+
+    -- 7) Large files (for files too big to fit in context)
+    CREATE TABLE IF NOT EXISTS large_files (
+      file_id         text PRIMARY KEY,
+      conversation_id bigint NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+      storage_kind    text NOT NULL DEFAULT 'path',
+      original_path   text,
+      mime_type       text NOT NULL,
+      content         text,
+      binary_content  bytea,
+      token_count     bigint NOT NULL,
+      exploration_summary text,
+      explorer_used   text,
+      created_at      timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT large_files_storage_shape_check CHECK (
+        (storage_kind = 'path' AND original_path IS NOT NULL AND content IS NULL AND binary_content IS NULL) OR
+        (storage_kind = 'inline_text' AND content IS NOT NULL AND binary_content IS NULL) OR
+        (storage_kind = 'inline_binary' AND binary_content IS NOT NULL AND content IS NULL)
+      )
+    );
+
+    -- Migration: drop the old content check constraint to allow path-only storage (avoid NOTICE spam)
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'large_file_content_check'
+          AND conrelid = 'large_files'::regclass
+      ) THEN
+        EXECUTE 'ALTER TABLE large_files DROP CONSTRAINT large_file_content_check';
+      END IF;
+    END $$;
+
+    -- Migration: add storage_kind for explicit payload mode (path/inline_text/inline_binary)
+    DO $$ BEGIN
+      ALTER TABLE large_files ADD COLUMN storage_kind text;
+    EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+    -- Migration: backfill storage_kind from existing data
+    UPDATE large_files
+    SET storage_kind = CASE
+      WHEN content IS NOT NULL THEN 'inline_text'
+      WHEN binary_content IS NOT NULL THEN 'inline_binary'
+      ELSE 'path'
+    END
+    WHERE storage_kind IS NULL;
+
+    -- Migration: default + NOT NULL for storage_kind
+    DO $$ BEGIN
+      ALTER TABLE large_files ALTER COLUMN storage_kind SET DEFAULT 'path';
+    EXCEPTION WHEN others THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE large_files ALTER COLUMN storage_kind SET NOT NULL;
+    EXCEPTION WHEN others THEN NULL; END $$;
+
+    -- Migration: original_path is optional for inline payloads
+    DO $$ BEGIN
+      ALTER TABLE large_files ALTER COLUMN original_path DROP NOT NULL;
+    EXCEPTION WHEN others THEN NULL; END $$;
+
+    -- Migration: enforce coherent large_files row shape by storage_kind
+    DO $$ DECLARE
+      current_def text;
+      normalized_current_def text;
+      normalized_desired_def text := regexp_replace(
+        lower(
+          'CHECK (
+            (storage_kind = ''path'' AND original_path IS NOT NULL AND content IS NULL AND binary_content IS NULL) OR
+            (storage_kind = ''inline_text'' AND content IS NOT NULL AND binary_content IS NULL) OR
+            (storage_kind = ''inline_binary'' AND binary_content IS NOT NULL AND content IS NULL)
+          )'
+        ),
+        '[[:space:]()]',
+        '',
+        'g'
+      );
+    BEGIN
+      SELECT pg_get_constraintdef(oid)
+        INTO current_def
+      FROM pg_constraint
+      WHERE conname = 'large_files_storage_shape_check'
+        AND conrelid = 'large_files'::regclass;
+
+      IF current_def IS NOT NULL THEN
+        normalized_current_def := regexp_replace(
+          lower(replace(current_def, '::text', '')),
+          '[[:space:]()]',
+          '',
+          'g'
+        );
+      END IF;
+
+      IF current_def IS NULL OR normalized_current_def != normalized_desired_def THEN
+        IF current_def IS NOT NULL THEN
+          EXECUTE 'ALTER TABLE large_files DROP CONSTRAINT large_files_storage_shape_check';
+        END IF;
+
+        BEGIN
+          ALTER TABLE large_files
+            ADD CONSTRAINT large_files_storage_shape_check CHECK (
+              (storage_kind = 'path' AND original_path IS NOT NULL AND content IS NULL AND binary_content IS NULL) OR
+              (storage_kind = 'inline_text' AND content IS NOT NULL AND binary_content IS NULL) OR
+              (storage_kind = 'inline_binary' AND binary_content IS NOT NULL AND content IS NULL)
+            );
+        EXCEPTION WHEN duplicate_object THEN NULL; END;
+      END IF;
+    END $$;
+
+    CREATE INDEX IF NOT EXISTS large_files_conv_idx ON large_files(conversation_id);
+    CREATE INDEX IF NOT EXISTS large_files_path_idx ON large_files(original_path);
+
+    -- 8) Agentic map runs
+    CREATE TABLE IF NOT EXISTS agentic_map_runs (
+      map_id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_started_at   timestamptz NOT NULL DEFAULT now(),
+      status           text NOT NULL DEFAULT 'RUNNING',
+      input_path       text NOT NULL,
+      input_lcm_id     text NOT NULL,
+      output_path      text NOT NULL,
+      output_lcm_id    text,
+      prompt           text NOT NULL,
+      output_schema    jsonb NOT NULL,
+      read_only        boolean NOT NULL,
+      concurrency      integer NOT NULL,
+      timeout_seconds  integer NOT NULL,
+      max_attempts     integer NOT NULL
+    );
+
+    -- 9) Agentic map items
+    CREATE TABLE IF NOT EXISTS agentic_map_items (
+      map_id           uuid NOT NULL REFERENCES agentic_map_runs(map_id) ON DELETE CASCADE,
+      item_index       integer NOT NULL,
+      item             jsonb NOT NULL,
+      status           text NOT NULL DEFAULT 'PENDING',
+      attempts_used    integer NOT NULL DEFAULT 0,
+      started_at       timestamptz,
+      finished_at      timestamptz,
+      result           jsonb,
+      error            text,
+      PRIMARY KEY (map_id, item_index)
+    );
+
+    CREATE INDEX IF NOT EXISTS agentic_map_items_status_idx
+      ON agentic_map_items(map_id, status, item_index);
+
+    -- 10) LLM map runs (non-agentic parallel map)
+    CREATE TABLE IF NOT EXISTS llm_map_runs (
+      map_id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_started_at   timestamptz NOT NULL DEFAULT now(),
+      status           text NOT NULL DEFAULT 'RUNNING',
+      input_path       text NOT NULL,
+      input_lcm_id     text NOT NULL,
+      output_path      text NOT NULL,
+      output_lcm_id    text,
+      prompt           text NOT NULL,
+      output_schema    jsonb NOT NULL,
+      model            text,
+      concurrency      integer NOT NULL,
+      timeout_seconds  integer NOT NULL,
+      max_attempts     integer NOT NULL,
+      resolved_provider text,
+      resolved_model   text,
+      resolved_request_overrides jsonb
+    );
+
+    -- 11) LLM map items (one row per input line)
+    CREATE TABLE IF NOT EXISTS llm_map_items (
+      map_id           uuid NOT NULL REFERENCES llm_map_runs(map_id) ON DELETE CASCADE,
+      item_index       integer NOT NULL,
+      item             jsonb NOT NULL,
+      status           text NOT NULL DEFAULT 'PENDING',
+      attempts_used    integer NOT NULL DEFAULT 0,
+      started_at       timestamptz,
+      finished_at      timestamptz,
+      result           jsonb,
+      error            text,
+      PRIMARY KEY (map_id, item_index)
+    );
+
+    CREATE INDEX IF NOT EXISTS llm_map_items_status_idx
+      ON llm_map_items(map_id, status, item_index);
+  `)
+
+  initializedSchemas.add(schema)
+  log.info("user schema initialized", { userId, schema })
+}
+
+/**
+ * Wrapper to ensure user schema exists before running a query.
+ * For use in multi-tenant mode.
+ */
+export async function withUserSchema<T>(conn: postgres.Sql, fn: () => Promise<T>): Promise<T> {
+  const userId = getCurrentUser()
+
+  // In single-tenant mode, just run the query
+  if (!userId) {
+    return fn()
+  }
+
+  // Ensure schema exists
+  await ensureUserSchema(conn, userId)
+
+  // Set search path and run query
+  const schema = getUserSchema(userId)
+  await conn.unsafe(`SET search_path TO ${schema}, public`)
+
+  return fn()
+}
