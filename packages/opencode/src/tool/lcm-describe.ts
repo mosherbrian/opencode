@@ -1,5 +1,6 @@
 import z from "zod"
-import { Tool } from "./tool"
+import { Effect } from "effect"
+import * as Tool from "./tool"
 import { LcmDb } from "../session/lcm/db"
 import { SessionPrompt } from "../session/prompt"
 import { Log } from "../util/log"
@@ -26,30 +27,34 @@ interface LcmDescribeMetadata {
   lineageSummaryCount?: number
 }
 
-export const LcmDescribeTool = Tool.define<typeof parameters, LcmDescribeMetadata>("lcm_describe", {
-  description: DESCRIPTION,
-  parameters,
-  async execute(params, ctx) {
-    const id = params.id.trim()
+export const LcmDescribeTool = Tool.define(
+  "lcm_describe",
+  Effect.succeed({
+    description: DESCRIPTION,
+    parameters,
+    execute: (params: z.infer<typeof parameters>, ctx: Tool.Context) =>
+      Effect.promise(async () => {
+        const id = params.id.trim()
 
-    // Determine type from ID prefix
-    if (id.startsWith("file_")) {
-      return await describeFile(id, ctx.sessionID)
-    } else if (id.startsWith("sum_")) {
-      return await describeSummary(id, ctx.sessionID)
-    } else {
-      return {
-        title: `LCM describe: ${id}`,
-        metadata: {
-          id,
-          type: "unknown" as const,
-          found: false,
-        },
-        output: `Unknown LCM ID format: "${id}". Expected file_xxx or sum_xxx.`,
-      }
-    }
-  },
-})
+        // Determine type from ID prefix
+        if (id.startsWith("file_")) {
+          return await describeFile(id, ctx.sessionID)
+        } else if (id.startsWith("sum_")) {
+          return await describeSummary(id, ctx.sessionID)
+        } else {
+          return {
+            title: `LCM describe: ${id}`,
+            metadata: {
+              id,
+              type: "unknown" as const,
+              found: false,
+            },
+            output: `Unknown LCM ID format: "${id}". Expected file_xxx or sum_xxx.`,
+          }
+        }
+      }),
+  } satisfies Tool.DefWithoutID<typeof parameters, LcmDescribeMetadata>),
+)
 
 function formatStorageKind(storageKind: "path" | "inline_text" | "inline_binary"): string {
   if (storageKind === "path") return "path-backed file (on disk)"

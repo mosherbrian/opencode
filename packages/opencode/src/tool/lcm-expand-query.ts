@@ -1,5 +1,6 @@
 import z from "zod"
-import { Tool } from "./tool"
+import { Effect } from "effect"
+import * as Tool from "./tool"
 import { LcmRetrievalFacade } from "../session/lcm/retrieval-facade"
 import type { LcmRetrieval } from "../session/lcm/retrieval"
 import { SessionPrompt } from "../session/prompt"
@@ -43,10 +44,13 @@ interface ExpandQueryReply {
   truncated: boolean
 }
 
-export const LcmExpandQueryTool = Tool.define<typeof parameters, LcmExpandQueryMetadata>("lcm_expand_query", {
-  description: DESCRIPTION,
-  parameters,
-  async execute(params, ctx) {
+export const LcmExpandQueryTool = Tool.define(
+  "lcm_expand_query",
+  Effect.succeed({
+    description: DESCRIPTION,
+    parameters,
+    execute: (params: z.infer<typeof parameters>, ctx: Tool.Context) =>
+      Effect.promise(async () => {
     const prompt = params.prompt.trim()
     const query = params.query?.trim()
     const explicitSummaryIds = normalizeSummaryIds(params.summary_ids)
@@ -128,8 +132,9 @@ export const LcmExpandQueryTool = Tool.define<typeof parameters, LcmExpandQueryM
       },
       output: parsed.answer,
     }
-  },
-})
+      }),
+  } satisfies Tool.DefWithoutID),
+)
 
 function normalizeSummaryIds(input: string[] | undefined): string[] {
   if (!input) return []

@@ -1,5 +1,6 @@
 import z from "zod"
-import { Tool } from "./tool"
+import { Effect } from "effect"
+import * as Tool from "./tool"
 import { LcmDb } from "../session/lcm/db"
 import DESCRIPTION from "./lcm-grep.txt"
 import { Log } from "../util/log"
@@ -26,10 +27,13 @@ interface LcmGrepMetadata {
   archivedCoveringSummaryIds: string[]
 }
 
-export const LcmGrepTool = Tool.define<typeof parameters, LcmGrepMetadata>("lcm_grep", {
-  description: DESCRIPTION,
-  parameters,
-  async execute(params, ctx) {
+export const LcmGrepTool = Tool.define(
+  "lcm_grep",
+  Effect.succeed({
+    description: DESCRIPTION,
+    parameters,
+    execute: (params: z.infer<typeof parameters>, _ctx: Tool.Context) =>
+      Effect.promise(async () => {
     const page = params.page ?? 1
     const offset = (page - 1) * 50 // 50 results per query
 
@@ -166,8 +170,9 @@ export const LcmGrepTool = Tool.define<typeof parameters, LcmGrepMetadata>("lcm_
       },
       output: outputLines.join("\n"),
     }
-  },
-})
+      }),
+  } satisfies Tool.DefWithoutID),
+)
 
 function truncateContent(content: string, maxLength: number): string {
   const singleLine = content.replace(/\n/g, " ").trim()

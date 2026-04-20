@@ -1,5 +1,6 @@
 import z from "zod"
-import { Tool } from "./tool"
+import { Effect } from "effect"
+import * as Tool from "./tool"
 import { LcmDb } from "../session/lcm/db"
 import type { LcmToolMetadata } from "../session/lcm/types"
 import { Session } from "../session"
@@ -30,10 +31,13 @@ interface LcmReadMetadata {
   lcm?: LcmToolMetadata
 }
 
-export const LcmReadTool = Tool.define<typeof parameters, LcmReadMetadata>("lcm_read", {
-  description: DESCRIPTION,
-  parameters,
-  async execute(params, ctx) {
+export const LcmReadTool = Tool.define(
+  "lcm_read",
+  Effect.succeed({
+    description: DESCRIPTION,
+    parameters,
+    execute: (params: z.infer<typeof parameters>, ctx: Tool.Context) =>
+      Effect.promise(async () => {
     // Sub-agent gate — same pattern as lcm_expand.
     const session = await Session.get(ctx.sessionID)
     if (!session.parentID) {
@@ -153,5 +157,6 @@ The explore sub-agent will call lcm_read and return a focused answer.`,
       },
       output: lines.join("\n"),
     }
-  },
-})
+      }),
+  } satisfies Tool.DefWithoutID),
+)

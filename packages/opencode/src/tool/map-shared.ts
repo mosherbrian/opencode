@@ -1,6 +1,7 @@
 import Ajv2020 from "ajv/dist/2020"
 import path from "path"
-import type { Tool } from "./tool"
+import { Effect } from "effect"
+import type * as Tool from "./tool"
 import { Instance } from "../project/instance"
 import { LcmDb } from "../session/lcm/db"
 import { ExploreDispatcher } from "../session/lcm/explore/dispatcher"
@@ -90,19 +91,19 @@ export function preflightSchema(outputSchema: Record<string, unknown>) {
 /** Check read/edit permissions and external directory for input/output paths. */
 export async function checkPathPermissions(ctx: Tool.Context, resolvedInputPath: string, resolvedOutputPath: string) {
   await assertExternalDirectory(ctx, resolvedInputPath)
-  await ctx.ask({
+  await Effect.runPromise(ctx.ask({
     permission: "read",
     patterns: [resolvedInputPath],
     always: ["*"],
     metadata: {},
-  })
+  }))
   await assertExternalDirectory(ctx, resolvedOutputPath)
-  await ctx.ask({
+  await Effect.runPromise(ctx.ask({
     permission: "edit",
     patterns: [path.relative(Instance.worktree, resolvedOutputPath)],
     always: ["*"],
     metadata: {},
-  })
+  }))
 }
 
 /** Register a file into LCM with exploration. Returns the LCM file ID. */

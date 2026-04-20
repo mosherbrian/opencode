@@ -26,6 +26,13 @@ import { Log } from "@/util"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { LcmDescribeTool } from "./lcm-describe"
+import { LcmExpandTool } from "./lcm-expand"
+import { LcmExpandQueryTool } from "./lcm-expand-query"
+import { LcmGrepTool } from "./lcm-grep"
+import { LcmReadTool } from "./lcm-read"
+import { AgenticMapTool } from "./agentic-map"
+import { LlmMapTool } from "./llm-map"
 import { Glob } from "@opencode-ai/shared/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -113,6 +120,13 @@ export const layer: Layer.Layer<
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
+    const lcmDescribe = yield* LcmDescribeTool
+    const lcmExpand = yield* LcmExpandTool
+    const lcmExpandQuery = yield* LcmExpandQueryTool
+    const lcmGrep = yield* LcmGrepTool
+    const lcmRead = yield* LcmReadTool
+    const agenticMap = yield* AgenticMapTool
+    const llmMap = yield* LlmMapTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -194,6 +208,13 @@ export const layer: Layer.Layer<
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
+          lcmDescribe: Tool.init(lcmDescribe),
+          lcmExpand: Tool.init(lcmExpand),
+          lcmExpandQuery: Tool.init(lcmExpandQuery),
+          lcmGrep: Tool.init(lcmGrep),
+          lcmRead: Tool.init(lcmRead),
+          agenticMap: Tool.init(agenticMap),
+          llmMap: Tool.init(llmMap),
         })
 
         return {
@@ -216,6 +237,13 @@ export const layer: Layer.Layer<
             tool.patch,
             ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [tool.lsp] : []),
             ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [tool.plan] : []),
+            tool.lcmDescribe,
+            tool.lcmExpand,
+            tool.lcmExpandQuery,
+            tool.lcmGrep,
+            tool.lcmRead,
+            tool.agenticMap,
+            tool.llmMap,
           ],
           task: tool.task,
           read: tool.read,

@@ -1,4 +1,5 @@
-import { Tool } from "./tool"
+import { Effect } from "effect"
+import * as Tool from "./tool"
 import DESCRIPTION from "./agentic-map.txt"
 import z from "zod"
 import { Session } from "../session"
@@ -65,10 +66,14 @@ export function buildSystemMessage(readOnly: boolean): string {
   return lines.join("\n")
 }
 
-export const AgenticMapTool = Tool.define("agentic_map", {
-  description: DESCRIPTION,
-  parameters,
-  async execute(params: Params, ctx) {
+export const AgenticMapTool = Tool.define(
+  "agentic_map",
+  Effect.succeed({
+    description: DESCRIPTION,
+    parameters,
+    execute: (params: Params, ctx: Tool.Context) =>
+      Effect.gen(function* () {
+        return yield* Effect.promise(async () => {
     const concurrency = 16
     const timeoutSeconds = params.timeout_seconds ?? 900
     const maxAttempts = params.max_attempts ?? 3
@@ -87,7 +92,7 @@ export const AgenticMapTool = Tool.define("agentic_map", {
     const items = await parseJsonlFile(resolvedInputPath)
 
     // Task permission: spawning sub-agents (after we know item count)
-    await ctx.ask({
+    await Effect.runPromise(ctx.ask({
       permission: "task",
       patterns: ["*"],
       always: ["*"],
@@ -95,7 +100,7 @@ export const AgenticMapTool = Tool.define("agentic_map", {
         description: `agentic_map: ${items.length} items`,
         subagent_type: "agentic_map",
       },
-    })
+    }))
 
     // --- Step 5: Get model info for LCM ---
     const parentMsg = await MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID })
@@ -152,7 +157,7 @@ export const AgenticMapTool = Tool.define("agentic_map", {
       let runningCount = 0
 
       function updateProgress() {
-        ctx.metadata({
+        Effect.runPromise(ctx.metadata({
           title: `agentic_map: ${succeededCount + failedCount}/${items.length} items`,
           metadata: {
             map_id: mapId,
@@ -161,7 +166,7 @@ export const AgenticMapTool = Tool.define("agentic_map", {
             failed: failedCount,
             running: runningCount,
           },
-        })
+        }))
       }
 
       async function claimItem(): Promise<{ item_index: number; item: unknown } | null> {
@@ -381,5 +386,7 @@ export const AgenticMapTool = Tool.define("agentic_map", {
         }),
       }
     }) // end withUserContext
-  },
-})
+        })
+      }),
+  } satisfies Tool.DefWithoutID),
+)

@@ -88,6 +88,34 @@ export type Layout = ConfigLayout.Layout
 const AgentRef = Schema.Any.annotate({ [ZodOverride]: ConfigAgent.Info })
 const LogLevelRef = Schema.Any.annotate({ [ZodOverride]: Log.Level })
 
+export const LcmPrompts = z
+  .object({
+    "dolt:summarize:d1": z.string().optional().describe("Override template for Dolt d1 summarize prompt"),
+    "dolt:condense:d2": z.string().optional().describe("Override template for Dolt d2 condense prompt"),
+    "upward:summarize:d1": z.string().optional().describe("Override template for Upward d1 summarize prompt"),
+    "upward:condense:d2": z.string().optional().describe("Override template for Upward d2 condense prompt"),
+    "upward:condense:d3": z.string().optional().describe("Override template for Upward d3+ condense prompt"),
+  })
+  .strict()
+  .meta({
+    ref: "LcmPromptsConfig",
+  })
+export type LcmPrompts = z.infer<typeof LcmPrompts>
+
+export const Lcm = z
+  .object({
+    prompts: LcmPrompts.optional().describe(
+      "Optional per-key LCM summarize/condense prompt overrides. Defaults remain built in when omitted.",
+    ),
+  })
+  .strict()
+  .meta({
+    ref: "LcmConfig",
+  })
+export type Lcm = z.infer<typeof Lcm>
+
+const LcmRef = Schema.Any.annotate({ [ZodOverride]: Lcm })
+
 const PositiveInt = Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThan(0))
 const NonNegativeInt = Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))
 
@@ -192,6 +220,7 @@ export const Info = Schema.Struct({
     ),
   ).annotate({ description: "MCP (Model Context Protocol) server configurations" }),
   formatter: Schema.optional(ConfigFormatter.Info),
+  lcm: Schema.optional(LcmRef).annotate({ description: "LCM-specific runtime customizations" }),
   lsp: Schema.optional(ConfigLSP.Info),
   instructions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Additional instruction files or patterns to include",

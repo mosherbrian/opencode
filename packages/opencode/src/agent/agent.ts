@@ -172,6 +172,10 @@ export const layer = Layer.effect(
                 websearch: "allow",
                 codesearch: "allow",
                 read: "allow",
+                lcm_describe: "allow",
+                lcm_expand: "allow",
+                lcm_grep: "allow",
+                lcm_read: "allow",
                 external_directory: {
                   "*": "ask",
                   ...Object.fromEntries(whitelistedDirs.map((dir) => [dir, "allow"])),

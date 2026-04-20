@@ -11,6 +11,11 @@ import { Instance } from "../project/instance"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isImageAttachment, isPdfAttachment, sniffAttachmentMime } from "@/util/media"
+import { LargeFileThreshold } from "../session/lcm/large-file-threshold"
+import { isLcmReady } from "../session/lcm/runtime"
+import { Log } from "@/util"
+
+const readLog = Log.create({ service: "tool.read" })
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -230,6 +235,54 @@ export const ReadTool = Tool.define(
 
       if (isBinaryFile(filepath, sample)) {
         return yield* Effect.fail(new Error(`Cannot read binary file: ${filepath}`))
+      }
+
+      // LCM large file redirect: when LCM is ready and the file exceeds the
+      // threshold, store the file reference in LCM and return a compact marker
+      // instead of dumping the full content into context.
+      const hasExplicitRange = params.offset !== undefined || params.limit !== undefined
+      if (!hasExplicitRange && isLcmReady() && Number(stat.size) > LargeFileThreshold.DEFAULT_BYTE_THRESHOLD) {
+        const lcmResult = yield* Effect.promise(async () => {
+          const { LcmDb } = await import("../session/lcm/db")
+          const { SessionPrompt } = await import("../session/prompt")
+
+          // Get existing LCM conversation for this session
+          const conversationId = await SessionPrompt.getLcmConversationId(ctx.sessionID)
+          if (!conversationId) throw new Error("No LCM conversation for session")
+
+          const { fileId, tokenCount } = await LcmDb.insertLargeFileFromPath({
+            conversationId,
+            filePath: filepath,
+            mimeType: AppFileSystem.mimeType(filepath) ?? "application/octet-stream",
+          })
+
+          return { fileId, tokenCount, sizeBytes: Number(stat.size) }
+        })
+
+        readLog.info("large file stored in LCM", {
+          filepath,
+          fileId: lcmResult.fileId,
+          tokenCount: lcmResult.tokenCount,
+        })
+
+        return {
+          title,
+          output: [
+            `**Large file automatically stored in LCM for efficient interaction.**`,
+            ``,
+            `**File ID:** ${lcmResult.fileId}`,
+            `**Path:** ${filepath}`,
+            `**Size:** ${lcmResult.sizeBytes} bytes (~${lcmResult.tokenCount} tokens)`,
+            ``,
+            `Use \`Task sub-agent\` with file_id "${lcmResult.fileId}" to ask questions about this file,`,
+            `or use \`lcm_describe\` to see metadata and exploration summary.`,
+          ].join("\n"),
+          metadata: {
+            preview: `Large file stored in LCM (file_id: ${lcmResult.fileId}, ~${lcmResult.tokenCount} tokens)`,
+            truncated: false,
+            loaded: loaded.map((item) => item.filepath),
+          },
+        }
       }
 
       const file = yield* Effect.promise(() =>

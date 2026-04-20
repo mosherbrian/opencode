@@ -1,5 +1,6 @@
 import z from "zod"
-import { Tool } from "./tool"
+import { Effect } from "effect"
+import * as Tool from "./tool"
 import { LcmDb } from "../session/lcm/db"
 import { Session } from "../session"
 import { SessionPrompt } from "../session/prompt"
@@ -28,10 +29,13 @@ interface LcmExpandMetadata {
   archivedPointer?: boolean
 }
 
-export const LcmExpandTool = Tool.define<typeof parameters, LcmExpandMetadata>("lcm_expand", {
-  description: DESCRIPTION,
-  parameters,
-  async execute(params, ctx) {
+export const LcmExpandTool = Tool.define(
+  "lcm_expand",
+  Effect.succeed({
+    description: DESCRIPTION,
+    parameters,
+    execute: (params: z.infer<typeof parameters>, ctx: Tool.Context) =>
+      Effect.promise(async () => {
     // Check if this is a sub-agent by looking at session parentID
     const session = await Session.get(ctx.sessionID)
     if (!session.parentID) {
@@ -181,5 +185,6 @@ The sub-agent will be able to call lcm_expand to see the full content.`,
       },
       output: `${metadataBlock}\n\nExpanded summary "${params.summary_id}" (${summary.kind}) to ${messages.length} original messages:\n\n${output}`,
     }
-  },
-})
+      }),
+  } satisfies Tool.DefWithoutID),
+)

@@ -1,4 +1,5 @@
-import { Tool } from "./tool"
+import { Effect } from "effect"
+import * as Tool from "./tool"
 import DESCRIPTION from "./llm-map.txt"
 import z from "zod"
 import { generateText } from "ai"
@@ -142,10 +143,13 @@ function buildRetryMessage(originalUserMessage: string, validationError: string,
 
 export { buildJsonModeProviderOptions, mergeProviderOptions }
 
-export const LlmMapTool = Tool.define("llm_map", {
-  description: DESCRIPTION,
-  parameters,
-  async execute(params: Params, ctx) {
+export const LlmMapTool = Tool.define(
+  "llm_map",
+  Effect.succeed({
+    description: DESCRIPTION,
+    parameters,
+    execute: (params: Params, ctx: Tool.Context) =>
+      Effect.promise(async () => {
     const concurrency = params.concurrency ?? 16
     const timeoutSeconds = params.timeout_seconds ?? 120
     const maxAttempts = params.max_attempts ?? 3
@@ -238,7 +242,7 @@ export const LlmMapTool = Tool.define("llm_map", {
       let runningCount = 0
 
       function updateProgress() {
-        ctx.metadata({
+        Effect.runPromise(ctx.metadata({
           title: `llm_map: ${succeededCount + failedCount}/${items.length} items`,
           metadata: {
             map_id: mapId,
@@ -247,7 +251,7 @@ export const LlmMapTool = Tool.define("llm_map", {
             failed: failedCount,
             running: runningCount,
           },
-        })
+        }))
       }
 
       async function claimItem(): Promise<{ item_index: number; item: unknown } | null> {
@@ -483,5 +487,6 @@ export const LlmMapTool = Tool.define("llm_map", {
         }),
       }
     }) // end withUserContext
-  },
-})
+      }),
+  } satisfies Tool.DefWithoutID),
+)
