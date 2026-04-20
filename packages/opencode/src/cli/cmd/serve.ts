@@ -7,6 +7,7 @@ import { Server } from "../../server/server"
 import { cmd } from "./cmd"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Flag } from "../../flag/flag"
+import { bootstrap } from "../bootstrap"
 import { Workspace } from "../../control-plane/workspace"
 import { Project } from "../../project"
 import { Installation } from "../../installation"
@@ -217,7 +218,7 @@ export const ServeCommand = cmd({
       }),
   describe: "starts a headless opencode server",
   handler: async (args) => {
-    const opts = await resolveNetworkOptions(args)
+    const networkOpts = await resolveNetworkOptions(args)
     const relayURL = (
       args["relay-url"] ??
       process.env.OPENCODE_EXPERIMENTAL_PUSH_RELAY_URL ??
@@ -233,7 +234,7 @@ export const ServeCommand = cmd({
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean)
-    const tailscaleAdvertiseHost = readTailscaleAdvertiseHost(opts.hostname)
+    const tailscaleAdvertiseHost = readTailscaleAdvertiseHost(networkOpts.hostname)
     const advertiseHosts = [
       ...new Set([
         ...advertiseHostsFromArg,
@@ -247,7 +248,12 @@ export const ServeCommand = cmd({
     const connectQR = Boolean(args["connect-qr"])
 
     if (connectQR) {
-      const pairHosts = hosts(opts.hostname, opts.port > 0 ? opts.port : 4096, advertiseHosts, false)
+      const pairHosts = hosts(
+        networkOpts.hostname,
+        networkOpts.port > 0 ? networkOpts.port : 4096,
+        advertiseHosts,
+        false,
+      )
       if (!pairHosts.length) {
         console.log("connect qr mode requires at least one valid advertised host")
         return
@@ -270,6 +276,7 @@ export const ServeCommand = cmd({
       console.log("Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
     }
 
+    const opts = await bootstrap(process.cwd(), () => resolveNetworkOptions(args))
     const server = await Server.listen(opts)
     console.log(`opencode server listening on http://${server.hostname}:${server.port}`)
 
