@@ -50,6 +50,26 @@ import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { EffectBridge } from "@/effect"
 
+// --- LCM imports ---
+import { isLcmReady } from "./lcm/runtime"
+import { LcmDb } from "./lcm/db"
+import { LcmContext } from "./lcm/context"
+import { LcmContextSnapshot } from "./lcm/context-snapshot"
+import type { LcmRetrieval } from "./lcm/retrieval"
+import {
+  LCM_PRE_RESPONSE_HOOK_MAX_DISTANCE,
+  LCM_PRE_RESPONSE_HOOK_MIN_SCORE,
+  LCM_PRE_RESPONSE_HOOK_TOP_K,
+} from "./lcm/config"
+import {
+  compactUntilUnderHardLimit,
+  getActiveLcmRuntimeStrategy,
+  isThresholdCompactionInFlight,
+  scheduleThresholdCompaction,
+} from "./lcm/strategy"
+import { TokenBudget } from "./token-budget"
+import { Token } from "@/util"
+
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
 
@@ -65,6 +85,806 @@ const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested struc
 
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
+
+// =========================================================================
+// --- LCM: helper functions for context management ---
+// =========================================================================
+
+/** Per-session sync state: tracks the last message ID synced to LCM. */
+const lcmSyncState = new Map<string, string>()
+
+/**
+ * Write a context snapshot, swallowing errors (best-effort for TUI display).
+ */
+async function writeLcmContextSnapshotBestEffort(input: {
+  conversationId: number
+  sessionID: string
+  reason: string
+  triggerMessageId?: number
+}) {
+  try {
+    await LcmContextSnapshot.write(input)
+  } catch (error) {
+    log.warn("failed to write lcm context snapshot", {
+      sessionID: input.sessionID,
+      conversationId: input.conversationId,
+      reason: input.reason,
+      error,
+    })
+  }
+}
+
+/**
+ * Get or create an LCM conversation ID for an OpenCode session.
+ * Creates a new LCM conversation if one doesn't exist.
+ * If the session has a parent, the new conversation will be linked to
+ * the parent's, allowing the child to access files and summaries from ancestors.
+ */
+async function getOrCreateLcmConversation(
+  sessionID: string,
+  model: Provider.Model,
+  sessionGet: (id: string) => Promise<Session.Info>,
+): Promise<number | null> {
+  const titlePrefix = `[OpenCode Session: ${sessionID}]`
+
+  const conn = LcmDb.getConnection()
+  const existing = await conn<{ conversation_id: number }[]>`
+    SELECT conversation_id
+    FROM conversations
+    WHERE title LIKE ${titlePrefix + "%"}
+    LIMIT 1
+  `
+
+  if (existing.length > 0) {
+    return existing[0].conversation_id
+  }
+
+  // Check if this session has a parent for conversation linkage
+  let parentConversationId: number | undefined
+  try {
+    const session = await sessionGet(sessionID)
+    if (session.parentID) {
+      parentConversationId =
+        (await getOrCreateLcmConversation(session.parentID, model, sessionGet)) ?? undefined
+    }
+  } catch {
+    // Session lookup failed, proceed without parent linkage
+  }
+
+  const conversationId = await LcmDb.createConversation({
+    title: titlePrefix,
+    modelName: model.id,
+    modelCtxMaxTokens: model.limit.context,
+    parentConversationId,
+  })
+
+  log.info("created LCM conversation for session", { sessionID, conversationId, parentConversationId })
+  return conversationId
+}
+
+/**
+ * Look up the LCM conversation ID for a session (if one exists).
+ * Returns null if no conversation has been created for this session yet.
+ */
+export async function getLcmConversationId(sessionID: string): Promise<number | null> {
+  const titlePrefix = `[OpenCode Session: ${sessionID}]`
+  try {
+    const conn = LcmDb.getConnection()
+    const existing = await conn<{ conversation_id: number }[]>`
+      SELECT conversation_id
+      FROM conversations
+      WHERE title LIKE ${titlePrefix + "%"}
+      LIMIT 1
+    `
+    return existing[0]?.conversation_id ?? null
+  } catch (e) {
+    log.error("failed to look up LCM conversation", { sessionID, error: e })
+    return null
+  }
+}
+
+/**
+ * Format a session message (with parts) into LCM-compatible structure.
+ * Produces a content string and structured parts array for database storage.
+ */
+function formatMessageForLcm(msg: MessageV2.WithParts): {
+  role: LcmDb.MessageRole
+  content: string
+  tokenCount: number
+  parts: LcmDb.MessagePartInput[]
+} {
+  const contentParts: string[] = []
+  const structuredParts: LcmDb.MessagePartInput[] = []
+
+  for (let ordinal = 0; ordinal < msg.parts.length; ordinal++) {
+    const part = msg.parts[ordinal]
+    const base = { partId: part.id, sessionId: part.sessionID, ordinal }
+
+    switch (part.type) {
+      case "text":
+        structuredParts.push({
+          ...base,
+          partType: "text",
+          textContent: part.text,
+          isIgnored: part.ignored ?? null,
+          isSynthetic: part.synthetic ?? null,
+          metadata: part.metadata ?? null,
+        })
+        if (!part.ignored) {
+          contentParts.push(part.text)
+        }
+        break
+      case "reasoning":
+        structuredParts.push({
+          ...base,
+          partType: "reasoning",
+          textContent: part.text,
+          metadata: part.metadata ?? null,
+        })
+        if (part.text) {
+          contentParts.push(`<reasoning>\n${part.text}\n</reasoning>`)
+        }
+        break
+      case "tool": {
+        const toolPart: LcmDb.MessagePartInput = {
+          ...base,
+          partType: "tool",
+          toolCallId: part.callID,
+          toolName: part.tool,
+          toolStatus: part.state.status,
+          toolInput: part.state.input,
+          metadata: part.metadata ?? null,
+        }
+        if (part.state.status === "completed") {
+          const rawOutput = part.state.output
+          const output =
+            typeof rawOutput === "string" ? rawOutput : rawOutput == null ? "" : JSON.stringify(rawOutput)
+          toolPart.toolOutput = output
+          toolPart.toolTitle = part.state.title
+          if (part.state.metadata) {
+            toolPart.metadata = toolPart.metadata
+              ? { ...toolPart.metadata, ...part.state.metadata }
+              : part.state.metadata
+          }
+          contentParts.push(
+            `<tool name="${part.tool}">\nInput: ${JSON.stringify(part.state.input)}\nOutput: ${output}\n</tool>`,
+          )
+        } else if (part.state.status === "error") {
+          toolPart.toolError = part.state.error
+          if (part.state.metadata) {
+            toolPart.metadata = toolPart.metadata
+              ? { ...toolPart.metadata, ...part.state.metadata }
+              : part.state.metadata
+          }
+          contentParts.push(
+            `<tool name="${part.tool}">\nInput: ${JSON.stringify(part.state.input)}\nError: ${part.state.error}\n</tool>`,
+          )
+        }
+        structuredParts.push(toolPart)
+        break
+      }
+      case "file":
+        structuredParts.push({
+          ...base,
+          partType: "file",
+          fileMime: part.mime,
+          fileName: part.filename ?? null,
+          fileUrl: part.url,
+        })
+        break
+      case "subtask":
+        structuredParts.push({
+          ...base,
+          partType: "subtask",
+          subtaskPrompt: part.prompt,
+          subtaskDesc: part.description,
+          subtaskAgent: part.agent,
+        })
+        break
+      case "compaction":
+        structuredParts.push({
+          ...base,
+          partType: "compaction",
+          compactionAuto: part.auto,
+        })
+        break
+      default:
+        break
+    }
+  }
+
+  const content = contentParts.join("\n\n")
+  const role: LcmDb.MessageRole = msg.info.role === "user" ? "user" : "assistant"
+  return {
+    role,
+    content,
+    tokenCount: Token.estimate(content),
+    parts: structuredParts,
+  }
+}
+
+/**
+ * Sync session messages to LCM database (incremental when possible).
+ */
+async function syncSessionMessagesToLcm(
+  conversationId: number,
+  sessionID: string,
+  sessionMessages: MessageV2.WithParts[],
+) {
+  const lastSyncedId = lcmSyncState.get(sessionID)
+  if (lastSyncedId) {
+    const lastIndex = sessionMessages.findIndex((msg) => msg.info.id === lastSyncedId)
+    if (lastIndex >= 0) {
+      const newMessages = sessionMessages.slice(lastIndex + 1)
+      for (const msg of newMessages) {
+        const formatted = formatMessageForLcm(msg)
+        const messageId = await LcmDb.appendMessage({
+          conversationId,
+          role: formatted.role,
+          content: formatted.content,
+          tokenCount: formatted.tokenCount,
+        })
+        await LcmDb.insertMessageParts(messageId, formatted.parts)
+        await writeLcmContextSnapshotBestEffort({
+          conversationId,
+          sessionID,
+          reason: "leaf_appended",
+          triggerMessageId: messageId,
+        })
+      }
+      const lastMsg = sessionMessages.at(-1)
+      if (lastMsg) lcmSyncState.set(sessionID, lastMsg.info.id)
+      return
+    }
+  }
+
+  // Full sync fallback
+  const existingCount = await LcmDb.getMessageCount(conversationId)
+  if (existingCount > sessionMessages.length) {
+    log.warn("LCM message count exceeds session message count", { sessionID, conversationId, existingCount })
+    return
+  }
+  const newMessages = sessionMessages.slice(existingCount)
+  for (const msg of newMessages) {
+    const formatted = formatMessageForLcm(msg)
+    const messageId = await LcmDb.appendMessage({
+      conversationId,
+      role: formatted.role,
+      content: formatted.content,
+      tokenCount: formatted.tokenCount,
+    })
+    await LcmDb.insertMessageParts(messageId, formatted.parts)
+    await writeLcmContextSnapshotBestEffort({
+      conversationId,
+      sessionID,
+      reason: "leaf_appended",
+      triggerMessageId: messageId,
+    })
+  }
+  const lastMsg = sessionMessages.at(-1)
+  if (lastMsg) lcmSyncState.set(sessionID, lastMsg.info.id)
+}
+
+function mapLcmRoleToModel(role: string): "user" | "assistant" {
+  if (role === "user" || role === "system") return "user"
+  return "assistant"
+}
+
+/**
+ * Parse <tool> XML tags from LCM content and extract tool call information.
+ */
+function parseToolTagsFromLcm(content: string): {
+  name: string
+  input: unknown
+  output: string
+  isError: boolean
+}[] {
+  const tools: { name: string; input: unknown; output: string; isError: boolean }[] = []
+  const openTagPattern = /<tool name="([^"]+)">/g
+  let openMatch
+  while ((openMatch = openTagPattern.exec(content)) !== null) {
+    const name = openMatch[1]
+    const openTagEnd = openMatch.index + openMatch[0].length
+    const nextOpenMatch = content.slice(openTagEnd).match(/<tool name="[^"]+">\s*Input:/)
+    const searchEndPos =
+      nextOpenMatch && nextOpenMatch.index !== undefined ? openTagEnd + nextOpenMatch.index : content.length
+    let closeTagStart = -1
+    let searchPos = searchEndPos
+    while (searchPos > openTagEnd) {
+      const lastCloseInRange = content.lastIndexOf("</tool>", searchPos - 1)
+      if (lastCloseInRange === -1 || lastCloseInRange < openTagEnd) break
+      const candidateContent = content.slice(openTagEnd, lastCloseInRange)
+      if (/^\s*Input:\s*/.test(candidateContent) && /\n(Output|Error):/s.test(candidateContent)) {
+        closeTagStart = lastCloseInRange
+        break
+      }
+      searchPos = lastCloseInRange
+    }
+    if (closeTagStart === -1) continue
+    const innerContent = content.slice(openTagEnd, closeTagStart)
+    const inputMatch = innerContent.match(/^\s*Input:\s*/)
+    if (!inputMatch) continue
+    const afterInput = innerContent.slice(inputMatch[0].length)
+    const lastOutputIndex = afterInput.lastIndexOf("\nOutput:")
+    const lastErrorIndex = afterInput.lastIndexOf("\nError:")
+    let resultType: "Output" | "Error"
+    let splitIndex: number
+    if (lastOutputIndex === -1 && lastErrorIndex === -1) continue
+    if (lastOutputIndex === -1) {
+      resultType = "Error"
+      splitIndex = lastErrorIndex
+    } else if (lastErrorIndex === -1) {
+      resultType = "Output"
+      splitIndex = lastOutputIndex
+    } else if (lastOutputIndex > lastErrorIndex) {
+      resultType = "Output"
+      splitIndex = lastOutputIndex
+    } else {
+      resultType = "Error"
+      splitIndex = lastErrorIndex
+    }
+    const inputStr = afterInput.slice(0, splitIndex)
+    const markerLength = resultType === "Output" ? "\nOutput:".length : "\nError:".length
+    const resultStr = afterInput.slice(splitIndex + markerLength)
+    let input: unknown
+    try {
+      const parsed = JSON.parse(inputStr.trim())
+      input = typeof parsed === "object" && parsed !== null ? parsed : { value: parsed }
+    } catch {
+      input = { value: inputStr.trim() }
+    }
+    tools.push({ name, input, output: resultStr.trim(), isError: resultType === "Error" })
+  }
+  return tools
+}
+
+/**
+ * Strip all <tool name="...">...</tool> tags from content.
+ */
+function stripToolTagsFromLcm(content: string): string {
+  const ranges: { start: number; end: number }[] = []
+  const openTagPattern = /<tool name="[^"]+">[\s]*/g
+  let openMatch
+  while ((openMatch = openTagPattern.exec(content)) !== null) {
+    const openTagStart = openMatch.index
+    const openTagEnd = openMatch.index + openMatch[0].length
+    const nextOpenMatch = content.slice(openTagEnd).match(/<tool name="[^"]+">\s*Input:/)
+    const searchEndPos =
+      nextOpenMatch && nextOpenMatch.index !== undefined ? openTagEnd + nextOpenMatch.index : content.length
+    let closeTagEnd = -1
+    let searchPos = searchEndPos
+    while (searchPos > openTagEnd) {
+      const lastCloseInRange = content.lastIndexOf("</tool>", searchPos - 1)
+      if (lastCloseInRange === -1 || lastCloseInRange < openTagEnd) break
+      const candidateContent = content.slice(openTagEnd, lastCloseInRange)
+      if (/^\s*Input:\s*/.test(candidateContent) && /\n(Output|Error):/s.test(candidateContent)) {
+        closeTagEnd = lastCloseInRange + "</tool>".length
+        while (closeTagEnd < content.length && /\s/.test(content[closeTagEnd])) closeTagEnd++
+        break
+      }
+      searchPos = lastCloseInRange
+    }
+    if (closeTagEnd !== -1) ranges.push({ start: openTagStart, end: closeTagEnd })
+  }
+  let result = content
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    const range = ranges[i]
+    result = result.slice(0, range.start) + result.slice(range.end)
+  }
+  return result.trim()
+}
+
+/**
+ * Strip LCM-only markers that aren't tool tags but shouldn't appear in text parts.
+ */
+function stripLcmMarkers(content: string): string {
+  return content
+    .replace(/\[Patch:[^\]]*\]/g, "")
+    .replace(/<file\s+path="[^"]*"\s+mime="[^"]*"\s*\/>/g, "")
+    .replace(/<compaction\s*\/>/g, "")
+    .replace(/<subtask\s+agent="[^"]*">[\s\S]*?<\/subtask>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+const SUMMARY_ID_IN_CONTEXT_RE = /\[Summary ID: (sum_[a-f0-9]{16})\]/g
+
+/**
+ * Build a retrieval query string from the latest user message text parts.
+ */
+function buildPreResponseRetrievalQuery(message: MessageV2.WithParts | undefined): string {
+  if (!message || message.info.role !== "user") return ""
+  const chunks: string[] = []
+  for (const part of message.parts) {
+    if (part.type === "text" && !part.ignored && !part.synthetic) {
+      const text = part.text.trim()
+      if (text) chunks.push(text)
+    }
+    if (part.type === "subtask") {
+      const prompt = part.prompt.trim()
+      if (prompt) chunks.push(prompt)
+    }
+  }
+  return chunks.join("\n").trim()
+}
+
+/**
+ * Extract active summary IDs already present in the in-context summary lane.
+ */
+function collectActiveSummaryIdsFromContext(
+  context: Array<{ item_type: string; content: string }>,
+): Set<string> {
+  const ids = new Set<string>()
+  for (const item of context) {
+    if (item.item_type !== "summary") continue
+    for (const match of item.content.matchAll(SUMMARY_ID_IN_CONTEXT_RE)) {
+      if (match[1]) ids.add(match[1])
+    }
+  }
+  return ids
+}
+
+/**
+ * Format retrieval hits into ultra-short pre-response memory cue lines.
+ */
+function formatPreResponseMemoryCueBlock(input: {
+  hits: LcmRetrieval.QueryHit[]
+  activeSummaryIds: Iterable<string>
+  topK?: number
+}): string | null {
+  const topK = Math.max(1, Math.floor(input.topK ?? LCM_PRE_RESPONSE_HOOK_TOP_K))
+  const active = new Set(input.activeSummaryIds)
+  const cues = input.hits.filter((hit) => !active.has(hit.summaryId)).slice(0, topK)
+  if (cues.length === 0) return null
+  const lines = ["<memory-cues>"]
+  for (const [index, cue] of cues.entries()) {
+    const pointerIds = cue.pointerSummaryIds.length > 0 ? cue.pointerSummaryIds.join(",") : "-"
+    const lineageIds = cue.lineageSummaryIds.length > 0 ? cue.lineageSummaryIds.join(",") : "-"
+    const archived = cue.summaryType === "archive_stub" ? "yes" : "no"
+    lines.push(
+      `[cue ${index + 1}] summaryId=${cue.summaryId} summaryType=${cue.summaryType} archived=${archived} score=${cue.score.toFixed(3)} distance=${cue.distance.toFixed(3)} pointerIds=${pointerIds} lineageIds=${lineageIds} cue=${JSON.stringify(cue.cueText)}`,
+    )
+  }
+  lines.push("</memory-cues>")
+  return lines.join("\n")
+}
+
+/**
+ * Insert the cue block before the latest user message so the current query remains last.
+ */
+function injectPreResponseMemoryCueBlock(
+  messages: Array<{ role: string; content: any }>,
+  cueBlock: string | null,
+): Array<{ role: string; content: any }> {
+  if (!cueBlock) return messages
+  const lastUserIndex = [...messages].reverse().findIndex((message) => message.role === "user")
+  if (lastUserIndex === -1) {
+    return [...messages, { role: "user", content: cueBlock }]
+  }
+  const insertAt = messages.length - 1 - lastUserIndex
+  return [...messages.slice(0, insertAt), { role: "user", content: cueBlock }, ...messages.slice(insertAt)]
+}
+
+/**
+ * Build LCM-managed model messages, replacing the standard message conversion.
+ * Syncs session messages to LCM, handles threshold compaction, assembles
+ * context from the strategy, and injects ghost cues from off-context retrieval.
+ */
+async function buildLcmModelMessages(input: {
+  sessionID: string
+  user: MessageV2.User
+  model: Provider.Model
+  sessionMessages: MessageV2.WithParts[]
+  assistantMessageID?: string
+  toolTokenEstimate?: number
+  sessionGet: (id: string) => Promise<Session.Info>
+  setLcm: (sessionID: string, lcm: { inputTokens: number; threshold: number }) => Promise<void>
+  updatePart: (part: MessageV2.TextPart) => Promise<any>
+}): Promise<Array<{ role: string; content: any }>> {
+  const conversationId = await getOrCreateLcmConversation(input.sessionID, input.model, input.sessionGet)
+  const strategy = getActiveLcmRuntimeStrategy()
+  if (conversationId === null) {
+    throw new Error("failed to get or create LCM conversation for session " + input.sessionID)
+  }
+
+  try {
+    await syncSessionMessagesToLcm(conversationId, input.sessionID, input.sessionMessages)
+
+    // Two-tier threshold: measure overhead
+    const toolTokens = input.toolTokenEstimate ?? 0
+    // Use 0 as systemPromptTokens placeholder — actual system prompt is added separately
+    const budget = TokenBudget.computeBudget({
+      model: input.model,
+      systemPromptTokens: 0,
+      toolTokens,
+      softThresholdOverride: Number(process.env.OPENCODE_LCM_CONTEXT_THRESHOLD) || undefined,
+    })
+    TokenBudget.storeSessionBudget(input.sessionID, budget)
+    const overhead = budget.overhead
+    const reserve = budget.reserve
+    const contextWindow = input.model.limit.context
+    const softThresholdOverride = Number(process.env.OPENCODE_LCM_CONTEXT_THRESHOLD) || undefined
+    const thresholdCheck = await LcmContext.isOverThreshold({
+      conversationId,
+      overhead,
+      reserve,
+      contextWindow,
+      softThresholdOverride,
+    })
+    const compactionInFlight = isThresholdCompactionInFlight(conversationId)
+
+    log.info("building LCM context", {
+      sessionID: input.sessionID,
+      conversationId,
+      currentTokens: thresholdCheck.currentTokens,
+      softThreshold: thresholdCheck.softThreshold,
+      hardLimit: thresholdCheck.hardLimit,
+      overSoft: thresholdCheck.overSoft,
+      overHard: thresholdCheck.overHard,
+      compactionInFlight,
+      overhead,
+      reserve,
+      strategy: strategy.name,
+    })
+
+    // --- LCM: publish metrics to session for TUI display ---
+    const flagThreshold = softThresholdOverride ?? 0
+    await input.setLcm(input.sessionID, {
+      inputTokens: thresholdCheck.currentTokens + overhead,
+      threshold: flagThreshold,
+    })
+
+    // --- LCM: threshold compaction ---
+    if (thresholdCheck.overHard) {
+      log.info("context exceeds hard limit, blocking on compaction", {
+        sessionID: input.sessionID,
+        conversationId,
+        currentTokens: thresholdCheck.currentTokens,
+        hardLimit: thresholdCheck.hardLimit,
+        strategy: strategy.name,
+      })
+      LcmContext.setCompactionState(input.sessionID, conversationId, true)
+      try {
+        const compactResult = await compactUntilUnderHardLimit({
+          conversationId,
+          sessionID: input.sessionID,
+          user: input.user,
+          model: input.model,
+          overhead,
+          reserve,
+          contextWindow,
+          softThresholdOverride,
+        })
+        if (!compactResult.success) {
+          log.error("hard-limit compaction failed, proceeding anyway", {
+            sessionID: input.sessionID,
+            conversationId,
+            finalTokens: compactResult.finalTokens,
+            hardLimit: compactResult.hardLimit,
+            strategy: strategy.name,
+          })
+        }
+        await writeLcmContextSnapshotBestEffort({
+          conversationId,
+          sessionID: input.sessionID,
+          reason: "compaction_hard_limit",
+        })
+      } finally {
+        LcmContext.clearCompactionState(input.sessionID)
+      }
+    } else if (thresholdCheck.overSoft || strategy.name === "upward") {
+      // Tier 1 (soft threshold): schedule async compaction, proceed immediately
+      const job = scheduleThresholdCompaction({
+        conversationId,
+        sessionID: input.sessionID,
+        user: input.user,
+        model: input.model,
+        overhead,
+        reserve,
+        contextWindow,
+        softThresholdOverride,
+      })
+
+      if (job) {
+        LcmContext.setCompactionState(input.sessionID, conversationId, false)
+        const clearCompacting = () => LcmContext.clearCompactionState(input.sessionID)
+
+        if (input.assistantMessageID) {
+          const assistantMessageID = input.assistantMessageID
+          void job
+            .then(async (result) => {
+              if (!result?.actionTaken || !result.createdSummary) return
+
+              const afterTokens = result.newTokenCount ?? (await LcmDb.getContextTokenCount(conversationId))
+              const beforeTokens = result.beforeTokenCount ?? afterTokens
+
+              log.info("async compaction completed", {
+                sessionID: input.sessionID,
+                conversationId,
+                summaryId: result.createdSummary.summaryId,
+                summaryKind: result.createdSummary.kind,
+                beforeTokens,
+                afterTokens,
+                strategy: strategy.name,
+              })
+
+              // Build an LCM event part for the TUI
+              const event: MessageV2.TextPart = {
+                id: PartID.ascending(),
+                messageID: MessageID.make(assistantMessageID),
+                sessionID: SessionID.make(input.sessionID),
+                type: "text",
+                text: `LCM summary created: ${result.createdSummary.summaryId}`,
+                synthetic: true,
+                ignored: true,
+                metadata: {
+                  lcm: {
+                    type: "summary",
+                    summaryId: result.createdSummary.summaryId,
+                    summaryKind: result.createdSummary.kind,
+                    beforeTokens,
+                    afterTokens,
+                    strategy: strategy.name,
+                  },
+                },
+              }
+              await input.updatePart(event)
+
+              // Update session.lcm so TUI displays the new context size
+              await input.setLcm(input.sessionID, {
+                inputTokens: afterTokens + overhead,
+                threshold: flagThreshold,
+              })
+
+              await writeLcmContextSnapshotBestEffort({
+                conversationId,
+                sessionID: input.sessionID,
+                reason: "compaction_async_complete",
+              })
+            })
+            .catch((error: unknown) => {
+              log.warn("failed to publish async LCM summary event", {
+                sessionID: input.sessionID,
+                conversationId,
+                error,
+                strategy: strategy.name,
+              })
+            })
+            .finally(clearCompacting)
+        } else {
+          void job.finally(clearCompacting)
+        }
+      }
+    }
+
+    // --- LCM: assemble context from strategy ---
+    const context = await strategy.assembleContext(conversationId)
+
+    log.debug("LCM context fetched", {
+      conversationId,
+      entryCount: context.length,
+      byType: {
+        message: context.filter((e) => e.item_type === "message").length,
+        summary: context.filter((e) => e.item_type === "summary").length,
+      },
+      totalTokens: context.reduce((s, e) => s + e.token_count, 0),
+    })
+
+    // Pre-fetch structured parts for message entries
+    const messageIds = context
+      .filter((e) => e.item_type === "message" && e.message_id !== null)
+      .map((e) => e.message_id!)
+    const partsMap =
+      messageIds.length > 0
+        ? await LcmDb.getMessagePartsForMessages(messageIds)
+        : new Map<number, LcmDb.MessagePart[]>()
+
+    // --- LCM: pre-response ghost cue retrieval ---
+    const activeSummaryIds = collectActiveSummaryIdsFromContext(context)
+    const currentUserMessage = input.sessionMessages.find((message) => message.info.id === input.user.id)
+    const retrievalQuery = buildPreResponseRetrievalQuery(currentUserMessage)
+
+    let preResponseCueBlock: string | null = null
+    if (retrievalQuery) {
+      try {
+        const retrieval = await strategy.resolveRetrieval({
+          conversationId,
+          query: retrievalQuery,
+          topK: LCM_PRE_RESPONSE_HOOK_TOP_K,
+          minScore: LCM_PRE_RESPONSE_HOOK_MIN_SCORE,
+          maxDistance: LCM_PRE_RESPONSE_HOOK_MAX_DISTANCE,
+        })
+        preResponseCueBlock = formatPreResponseMemoryCueBlock({
+          hits: retrieval.hits,
+          activeSummaryIds,
+          topK: LCM_PRE_RESPONSE_HOOK_TOP_K,
+        })
+        if (preResponseCueBlock) {
+          log.debug("prepared pre-response memory cues", {
+            sessionID: input.sessionID,
+            conversationId,
+            cueCount: retrieval.hits.filter((hit) => !activeSummaryIds.has(hit.summaryId)).length,
+            strategy: strategy.name,
+          })
+        }
+      } catch (error) {
+        log.warn("failed pre-response off-context retrieval", {
+          sessionID: input.sessionID,
+          conversationId,
+          error,
+          strategy: strategy.name,
+        })
+      }
+    }
+
+    // --- LCM: convert context entries to model messages ---
+    const messages: Array<{ role: string; content: any }> = context.flatMap((entry, idx) => {
+      if (!entry.content.trim()) return []
+      const role = mapLcmRoleToModel(entry.role)
+
+      if (role === "user" && entry.message_id !== null) {
+        const dbParts = partsMap.get(entry.message_id)
+        const fileParts = dbParts?.filter((p) => p.part_type === "file" && p.file_url && p.file_mime)
+        if (fileParts && fileParts.length > 0) {
+          return [
+            {
+              role,
+              content: [
+                { type: "text", text: entry.content },
+                ...fileParts.map((p) => ({
+                  type: "image" as const,
+                  image: new URL(p.file_url!),
+                  mediaType: p.file_mime!,
+                })),
+              ],
+            },
+          ]
+        }
+      }
+
+      // For assistant messages, parse tool XML into structured tool-call/tool-result messages
+      if (role === "assistant") {
+        const tools = parseToolTagsFromLcm(entry.content)
+        if (tools.length > 0) {
+          const textContent = stripLcmMarkers(stripToolTagsFromLcm(entry.content))
+          const assistantParts: any[] = []
+          if (textContent) assistantParts.push({ type: "text", text: textContent })
+          for (let j = 0; j < tools.length; j++) {
+            assistantParts.push({
+              type: "tool-call",
+              toolCallId: `lcm_${idx}_${j}`,
+              toolName: tools[j].name,
+              input: tools[j].input,
+            })
+          }
+          return [
+            { role: "assistant", content: assistantParts },
+            {
+              role: "tool",
+              content: tools.map((t, j) => ({
+                type: "tool-result" as const,
+                toolCallId: `lcm_${idx}_${j}`,
+                toolName: t.name,
+                output: { type: "text" as const, value: t.output },
+              })),
+            },
+          ]
+        }
+      }
+
+      return [{ role, content: entry.content }]
+    })
+
+    return injectPreResponseMemoryCueBlock(messages, preResponseCueBlock)
+  } catch (e) {
+    log.error("failed to build LCM context", { sessionID: input.sessionID, error: e })
+    throw e
+  }
+}
+
+// =========================================================================
+// --- End LCM helper functions ---
+// =========================================================================
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
@@ -1369,7 +2189,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             continue
           }
 
+          // --- LCM: compaction is handled by LCM context management ---
+          // When LCM is active, stale compaction parts are removed.
+          // When LCM is not active, fall back to legacy compaction.
           if (task?.type === "compaction") {
+            if (isLcmReady()) {
+              // LCM handles compaction — just remove the stale compaction part
+              yield* sessions.removePart({
+                sessionID: task.sessionID,
+                messageID: task.messageID,
+                partID: task.id,
+              })
+              yield* slog.info("removed stale compaction task (LCM active)")
+              continue
+            }
             const result = yield* compaction.process({
               messages: msgs,
               parentID: lastUser.id,
@@ -1381,7 +2214,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             continue
           }
 
+          // Legacy overflow check — skipped when LCM is active (LCM manages thresholds)
           if (
+            !isLcmReady() &&
             lastFinished &&
             lastFinished.summary !== true &&
             (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
@@ -1425,6 +2260,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           })
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
+            const run = yield* runner()
             const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
 
@@ -1470,12 +2306,41 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, modelMsgs] = yield* Effect.all([
+            const [skills, env, instructions] = yield* Effect.all([
               sys.skills(agent),
               Effect.sync(() => sys.environment(model)),
               instruction.system().pipe(Effect.orDie),
-              MessageV2.toModelMessagesEffect(msgs, model),
             ])
+
+            // --- LCM: context management ---
+            // When LCM is active, replace standard message conversion with
+            // LCM-managed context window (sync, threshold compaction, ghost cues).
+            const modelMsgs: any[] = isLcmReady()
+              ? yield* Effect.promise(() => {
+                  // Estimate tool token overhead for budget computation
+                  const toolTokenEstimate = Object.values(tools).reduce((sum, t) => {
+                    const desc = (t as any).description ?? ""
+                    const params = (t as any).parameters ? JSON.stringify((t as any).parameters) : ""
+                    return sum + Token.estimate(desc + params)
+                  }, 0)
+
+                  return buildLcmModelMessages({
+                    sessionID,
+                    user: lastUser,
+                    model,
+                    sessionMessages: msgs,
+                    assistantMessageID: handle.message.id,
+                    toolTokenEstimate,
+                    sessionGet: (id) =>
+                      run.promise(sessions.get(SessionID.make(id))),
+                    setLcm: (sid, lcm) =>
+                      run.promise(sessions.setLcm({ sessionID: SessionID.make(sid), lcm })),
+                    updatePart: (part) =>
+                      run.promise(sessions.updatePart(part)),
+                  })
+                })
+              : yield* MessageV2.toModelMessagesEffect(msgs, model)
+
             const system = [...env, ...(skills ? [skills] : []), ...instructions]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)

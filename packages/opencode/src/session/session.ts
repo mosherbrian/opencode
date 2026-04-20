@@ -369,6 +369,7 @@ export interface Interface {
   }) => Effect.Effect<void>
   readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
+  readonly setLcm: (input: { sessionID: SessionID; lcm: Info["lcm"] }) => Effect.Effect<void>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<MessageV2.WithParts[]>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
@@ -628,6 +629,13 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service> =
       yield* patch(input.sessionID, { time: { updated: Date.now() }, summary: input.summary })
     })
 
+    const setLcm = Effect.fn("Session.setLcm")(function* (input: {
+      sessionID: SessionID
+      lcm: Info["lcm"]
+    }) {
+      yield* patch(input.sessionID, { lcm: input.lcm })
+    })
+
     const diff = Effect.fn("Session.diff")(function* (sessionID: SessionID) {
       return yield* storage
         .read<Snapshot.FileDiff[]>(["session_diff", sessionID])
@@ -701,6 +709,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service> =
       setRevert,
       clearRevert,
       setSummary,
+      setLcm,
       diff,
       messages,
       children,
