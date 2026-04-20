@@ -143,6 +143,14 @@ export const Info = z
       compacting: z.number().optional(),
       archived: z.number().optional(),
     }),
+    lcm: z
+      .object({
+        /** Estimated input tokens (LCM + system prompt + tool defs) */
+        inputTokens: z.number(),
+        /** The --context-threshold flag value (0 = not set) */
+        threshold: z.number(),
+      })
+      .optional(),
     permission: Permission.Ruleset.zod.optional(),
     revert: z
       .object({
@@ -248,6 +256,17 @@ export const Event = {
       sessionID: SessionID.zod.optional(),
       // z.lazy defers access to break circular dep: session → message-v2 → provider → plugin → session
       error: z.lazy(() => (MessageV2.Assistant.zod as unknown as z.ZodObject<any>).shape.error),
+    }),
+  ),
+  LcmFileLoaded: BusEvent.define(
+    "session.lcm_file_loaded",
+    z.object({
+      sessionID: SessionID.zod,
+      filePath: z.string(),
+      fileId: z.string(),
+      sizeBytes: z.number(),
+      tokenCount: z.number(),
+      durationMs: z.number(),
     }),
   ),
 }
