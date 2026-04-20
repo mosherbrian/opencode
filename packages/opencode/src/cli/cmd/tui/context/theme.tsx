@@ -513,7 +513,35 @@ export function tint(base: RGBA, overlay: RGBA, alpha: number): RGBA {
   return RGBA.fromInts(Math.round(r * 255), Math.round(g * 255), Math.round(b * 255))
 }
 
-function generateSystem(colors: TerminalColors, mode: "dark" | "light"): ThemeJson {
+function luminance(color: RGBA) {
+  return 0.299 * color.r + 0.587 * color.g + 0.114 * color.b
+}
+
+function chroma(color: RGBA) {
+  return Math.max(color.r, color.g, color.b) - Math.min(color.r, color.g, color.b)
+}
+
+function pickPrimaryColor(
+  bg: RGBA,
+  candidates: Array<{
+    key: string
+    color: RGBA | undefined
+  }>,
+) {
+  return candidates
+    .flatMap((item) => {
+      if (!item.color) return []
+      const contrast = Math.abs(luminance(item.color) - luminance(bg))
+      const vivid = chroma(item.color)
+      if (contrast < 0.16 || vivid < 0.12) return []
+      return [{ key: item.key, color: item.color, score: vivid * 1.5 + contrast }]
+    })
+    .sort((a, b) => b.score - a.score)[0]
+}
+
+// TODO: i exported this, just for keeping it simple for now, but this should
+// probably go into something shared if we decide to use this in opencode run
+export function generateSystem(colors: TerminalColors, mode: "dark" | "light"): ThemeJson {
   const bg = RGBA.fromHex(colors.defaultBackground ?? colors.palette[0]!)
   const fg = RGBA.fromHex(colors.defaultForeground ?? colors.palette[7]!)
   const transparent = RGBA.fromValues(bg.r, bg.g, bg.b, 0)
@@ -550,13 +578,37 @@ function generateSystem(colors: TerminalColors, mode: "dark" | "light"): ThemeJs
   const diffAddedLineNumberBg = tint(diffContextBg, ansiColors.green, diffAlpha)
   const diffRemovedLineNumberBg = tint(diffContextBg, ansiColors.red, diffAlpha)
   const diffLineNumber = textMuted
+  // The generated system theme also feeds the run footer highlight, so prefer
+  // the terminal's own cursor/selection accent when it stays legible.
+  const primary =
+    pickPrimaryColor(bg, [
+      {
+        key: "cursor",
+        color: colors.cursorColor ? RGBA.fromHex(colors.cursorColor) : undefined,
+      },
+      {
+        key: "selection",
+        color: colors.highlightBackground ? RGBA.fromHex(colors.highlightBackground) : undefined,
+      },
+      {
+        key: "blue",
+        color: ansiColors.blue,
+      },
+      {
+        key: "magenta",
+        color: ansiColors.magenta,
+      },
+    ]) ?? {
+      key: "blue",
+      color: ansiColors.blue,
+    }
 
   return {
     theme: {
-      // Primary colors using ANSI
-      primary: ansiColors.cyan,
-      secondary: ansiColors.magenta,
-      accent: ansiColors.cyan,
+      // Fall back to blue/magenta when the terminal UI colors are too muted.
+      primary: primary.color,
+      secondary: primary.key === "magenta" ? ansiColors.blue : ansiColors.magenta,
+      accent: primary.color,
 
       // Status colors using ANSI
       error: ansiColors.red,
@@ -709,11 +761,11 @@ function generateMutedTextColor(bg: RGBA, isDark: boolean): RGBA {
   return RGBA.fromInts(grayValue, grayValue, grayValue)
 }
 
-function generateSyntax(theme: Theme) {
+export function generateSyntax(theme: TuiThemeCurrent) {
   return SyntaxStyle.fromTheme(getSyntaxRules(theme))
 }
 
-function generateSubtleSyntax(theme: Theme) {
+export function generateSubtleSyntax(theme: TuiThemeCurrent) {
   const rules = getSyntaxRules(theme)
   return SyntaxStyle.fromTheme(
     rules.map((rule) => {
@@ -737,7 +789,7 @@ function generateSubtleSyntax(theme: Theme) {
   )
 }
 
-function getSyntaxRules(theme: Theme) {
+function getSyntaxRules(theme: TuiThemeCurrent) {
   return [
     {
       scope: ["default"],
