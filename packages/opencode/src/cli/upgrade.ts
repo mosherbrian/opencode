@@ -6,8 +6,11 @@ import { Installation } from "@/installation"
 import { InstallationVersion } from "@/installation/version"
 
 export async function upgrade() {
+  // Check disable flag early to avoid any network calls in air-gapped environments
+  if (Flag.OPENCODE_DISABLE_AUTOUPDATE) return
+
   const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
-  if (config.autoupdate === false || Flag.OPENCODE_DISABLE_AUTOUPDATE) return
+  if (config.autoupdate === false) return
   const method = await AppRuntime.runPromise(Installation.Service.use((svc) => svc.method()))
   const latest = await AppRuntime.runPromise(Installation.Service.use((svc) => svc.latest(method))).catch(() => {})
   if (!latest) return

@@ -11,11 +11,14 @@ import { MessageV2 } from "@/session/message-v2"
 import type { SessionID } from "@/session/schema"
 import { Database, eq } from "@/storage"
 import { Config } from "@/config"
+import { Flag } from "@/flag/flag"
 import { Log } from "@/util"
 import { SessionShareTable } from "./share.sql"
 
 const log = Log.create({ service: "share-next" })
-const disabled = process.env["OPENCODE_DISABLE_SHARE"] === "true" || process.env["OPENCODE_DISABLE_SHARE"] === "1"
+// Default to disabled for air-gapped deployment; re-enable with OPENCODE_DISABLE_SHARE=false
+const envVal = process.env["OPENCODE_DISABLE_SHARE"]?.toLowerCase()
+const disabled = envVal === "false" || envVal === "0" ? false : true
 
 export type Api = {
   create: string

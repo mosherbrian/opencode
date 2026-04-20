@@ -297,7 +297,8 @@ export const layer: Layer.Layer<
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const filtered = (yield* all()).filter((tool) => {
         if (tool.id === CodeSearchTool.id || tool.id === WebSearchTool.id) {
-          return input.providerID === ProviderID.opencode || Flag.OPENCODE_ENABLE_EXA
+          // Require explicit opt-in for external search tools (calls exa.ai)
+          return Flag.OPENCODE_ENABLE_EXA
         }
 
         const usePatch =
