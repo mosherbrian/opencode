@@ -14,6 +14,7 @@ import { createEffect, createMemo, createSignal, For, on, ParentProps, Show } fr
 import { createStore } from "solid-js/store"
 import { Dynamic } from "solid-js/web"
 import { AssistantParts, Message, MessageDivider, PART_MAPPING, type UserActions } from "./message-part"
+import { findAssistantMessages } from "./find-assistant-messages"
 import { Card } from "./card"
 import { Accordion } from "./accordion"
 import { StickyAccordionHeader } from "./sticky-accordion-header"
@@ -267,15 +268,10 @@ export function SessionTurn(
       if (!msg) return emptyAssistant
 
       const messages = allMessages() ?? emptyMessages
-      if (messageIndex() < 0) return emptyAssistant
+      const index = messageIndex()
+      if (index < 0) return emptyAssistant
 
-      const result: AssistantMessage[] = []
-      for (let i = 0; i < messages.length; i++) {
-        const item = messages[i]
-        if (!item) continue
-        if (item.role === "assistant" && item.parentID === msg.id) result.push(item as AssistantMessage)
-      }
-      return result
+      return findAssistantMessages(messages, index, msg.id)
     },
     emptyAssistant,
     { equals: same },
