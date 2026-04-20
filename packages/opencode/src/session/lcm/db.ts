@@ -1,9 +1,9 @@
 import { createHash } from "crypto"
 import postgres from "postgres"
 import z from "zod"
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { lazy } from "@/util/lazy"
-import { NamedError } from "@opencode-ai/util/error"
+import { NamedError } from "@opencode-ai/shared/util/error"
 import { LargeFileThreshold } from "./large-file-threshold"
 import { LCM_DATABASE_URL, LCM_EXTERNAL_DATABASE } from "./config"
 import {

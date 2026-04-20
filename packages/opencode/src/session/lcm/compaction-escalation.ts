@@ -1,4 +1,4 @@
-import { Token } from "@/util/token"
+import { Token } from "@/util"
 
 /**
  * Escalation tiers for compaction-generation passes.

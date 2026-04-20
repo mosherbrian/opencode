@@ -1,5 +1,5 @@
-import { Log } from "@/util/log"
-import { Provider } from "@/provider/provider"
+import { Log } from "@/util"
+import { Provider } from "@/provider"
 import { MessageV2 } from "@/session/message-v2"
 import { LcmDb } from "./db"
 import { LcmSummarize } from "./summarize"
@@ -1158,14 +1158,17 @@ export namespace LcmContext {
   export async function compactShortBindle(input: {
     conversationId: number
     sessionID: string
-    user: MessageV2.User
-    model: Provider.Model
+    user?: MessageV2.User
+    model?: Provider.Model
     abort?: AbortSignal
-    overhead: number
-    reserve: number
-    contextWindow: number
+    overhead?: number
+    reserve?: number
+    contextWindow?: number
     softThresholdOverride?: number
   }): Promise<ContextHandlerResult> {
+    if (!input.user || !input.model || input.overhead == null || input.reserve == null || input.contextWindow == null) {
+      return { actionTaken: false, condensed: false }
+    }
     const initialThreshold = await isOverThreshold({
       conversationId: input.conversationId,
       overhead: input.overhead,
@@ -1237,7 +1240,7 @@ export namespace LcmContext {
     const summariesAfterLeafStep = await getSummariesInContext(input.conversationId)
     const sprigCount = summariesAfterLeafStep.filter((summary) => summary.kind === "sprig").length
     if (sprigCount > 0) {
-      const condensationResult = await attemptCondensation(input, summariesAfterLeafStep)
+      const condensationResult = await attemptCondensation(input as any, summariesAfterLeafStep)
       if (condensationResult.actionTaken) {
         actionTaken = true
         condensed = condensationResult.condensed
@@ -1308,15 +1311,18 @@ export namespace LcmContext {
   export async function compactForcedRecursive(input: {
     conversationId: number
     sessionID: string
-    user: MessageV2.User
-    model: Provider.Model
+    user?: MessageV2.User
+    model?: Provider.Model
     abort?: AbortSignal
-    overhead: number
-    reserve: number
-    contextWindow: number
+    overhead?: number
+    reserve?: number
+    contextWindow?: number
     softThresholdOverride?: number
     sweepMode?: UpwardSweepMode
   }): Promise<ContextHandlerResult> {
+    if (!input.user || !input.model || input.overhead == null || input.reserve == null || input.contextWindow == null) {
+      return { actionTaken: false, condensed: false }
+    }
     const initialThreshold = await isOverThreshold({
       conversationId: input.conversationId,
       overhead: input.overhead,
@@ -1326,8 +1332,8 @@ export namespace LcmContext {
     })
     const baseResult = {
       beforeTokenCount: initialThreshold.currentTokens,
-      maxTokens: input.contextWindow,
-      threshold: initialThreshold.softThreshold / input.contextWindow,
+      maxTokens: input.contextWindow!,
+      threshold: initialThreshold.softThreshold / input.contextWindow!,
     }
 
     let actionTaken = false
@@ -1438,7 +1444,7 @@ export namespace LcmContext {
       const tokensBeforeCondensedPass = await LcmDb.getContextTokenCount(input.conversationId)
 
       const condensationResult = await attemptCondensationForOrder({
-        input,
+        input: input as any,
         parentSummaries: candidate.parentSummaries,
         // lossless-claw parity: only d1->d2 condensed pass carries prior-summary
         // continuity context. Deeper passes run without prior context.
@@ -1747,16 +1753,16 @@ export namespace LcmContext {
       const mappedRole: "user" | "assistant" = msg.role === "user" || msg.role === "system" ? "user" : "assistant"
 
       const baseInfo = {
-        id: `lcm_msg_${msg.messageId}`,
-        sessionID: "",
+        id: `lcm_msg_${msg.messageId}` as MessageV2.Info["id"],
+        sessionID: "" as MessageV2.Info["sessionID"],
         role: mappedRole,
         time: { created: Date.now() },
       }
 
       // Create a text part with the message content
       const textPart: MessageV2.TextPart = {
-        id: `lcm_part_${msg.messageId}`,
-        sessionID: "",
+        id: `lcm_part_${msg.messageId}` as MessageV2.TextPart["id"],
+        sessionID: "" as MessageV2.TextPart["sessionID"],
         messageID: baseInfo.id,
         type: "text",
         text: msg.content,

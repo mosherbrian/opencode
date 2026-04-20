@@ -3,8 +3,8 @@ import os from "os"
 import path from "path"
 import postgres from "postgres"
 import { $ } from "bun"
-import { Log } from "@/util/log"
-import { Archive } from "@/util/archive"
+import { Log } from "@/util"
+import { Archive } from "@/util"
 import {
   LCM_DATABASE_URL,
   LCM_DATABASE_USER,

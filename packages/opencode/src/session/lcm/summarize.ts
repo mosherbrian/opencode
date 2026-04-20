@@ -1,7 +1,8 @@
+import * as Bridge from "./upstream-bridge"
 import { generateText } from "ai"
-import { Log } from "@/util/log"
-import { Token } from "@/util/token"
-import { Provider } from "@/provider/provider"
+import { Log } from "@/util"
+import { Token } from "@/util"
+import { Provider } from "@/provider"
 import { MessageV2 } from "@/session/message-v2"
 import { Summary } from "./summary"
 import { LcmDb } from "./db"
@@ -152,9 +153,9 @@ export namespace LcmSummarize {
     // Get the model - use provided model, or fall back to user model
     const model = input.model
       ? input.model
-      : await Provider.getModel(input.user.model.providerID, input.user.model.modelID)
+      : await Bridge.getModel(input.user.model.providerID, input.user.model.modelID)
 
-    const language = await Provider.getLanguage(model)
+    const language = await Bridge.getLanguage(model)
 
     const promptTemplate = await resolveLcmPrompt({
       operation: "summarize",

@@ -1,6 +1,6 @@
 import fs from "fs/promises"
 import path from "path"
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { LcmDb } from "./db"
 import {
   LCM_RETRIEVAL_MAX_DISTANCE,

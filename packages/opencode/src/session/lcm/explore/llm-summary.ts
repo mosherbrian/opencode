@@ -1,7 +1,8 @@
+import * as Bridge from "../upstream-bridge"
 import { generateText } from "ai"
-import { Provider } from "@/provider/provider"
-import { Log } from "@/util/log"
-import { Token } from "@/util/token"
+import { Provider } from "@/provider"
+import { Log } from "@/util"
+import { Token } from "@/util"
 import { generateAgentSummary } from "./agent-summary"
 
 const log = Log.create({ service: "lcm.explore.llm-summary" })
@@ -131,7 +132,7 @@ ${truncateContent(input.content, 50000)}
 Please provide a concise, insightful summary of this file.`
 
   // Get language model
-  const languageModel = await Provider.getLanguage(input.model)
+  const languageModel = await Bridge.getLanguage(input.model)
 
   // Call the LLM
   const result = await generateText({

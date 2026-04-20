@@ -818,7 +818,7 @@ async function buildLcmModelMessages(input: {
     }
 
     // --- LCM: convert context entries to model messages ---
-    const messages: Array<{ role: string; content: any }> = context.flatMap((entry, idx) => {
+    const messages: Array<{ role: string; content: any }> = context.flatMap((entry, idx): Array<{ role: string; content: any }> => {
       if (!entry.content.trim()) return []
       const role = mapLcmRoleToModel(entry.role)
 

@@ -21,6 +21,8 @@ import { Log } from "@/util"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
 import { ModelID, ProviderID } from "@/provider/schema"
+import { Provider } from "@/provider"
+import { TokenBudget } from "@/session/token-budget"
 import { errors } from "../../error"
 import { lazy } from "@/util/lazy"
 import { Bus } from "@/bus"
@@ -1131,7 +1133,7 @@ export const SessionRoutes = lazy(() =>
                         severity: z.enum(["error", "warning"]),
                         check: z.string(),
                         message: z.string(),
-                        details: z.record(z.unknown()).optional(),
+                        details: z.record(z.string(), z.unknown()).optional(),
                       }),
                     ),
                     stats: z.object({
@@ -1209,16 +1211,46 @@ export const SessionRoutes = lazy(() =>
         const sessionID = c.req.valid("param").sessionID
         return jsonRequest("SessionRoutes.lcmCompact", c, function* () {
           const session = yield* Session.Service
+          const provider = yield* Provider.Service
           const info = yield* session.get(sessionID)
           const conversationId = (info as Record<string, unknown>).lcmConversationId as number | undefined
           if (!conversationId) {
             return { success: false, message: "Session does not have an LCM conversation" }
           }
+
+          // Find the last user message to get model info
+          const messages = yield* session.messages({ sessionID })
+          const lastUserMsg = [...messages].reverse().find(
+            (m): m is MessageV2.WithParts & { info: MessageV2.User } =>
+              m.info.role === "user" && !!m.info.model,
+          )
+          if (!lastUserMsg) {
+            return { success: false, message: "No user message with model info found in session" }
+          }
+
+          // Get the full Provider.Model object
+          const model = yield* provider.getModel(
+            lastUserMsg.info.model.providerID,
+            lastUserMsg.info.model.modelID,
+          )
+
+          // Compute token budget
+          const budget = TokenBudget.computeBudget({
+            model,
+            systemPromptTokens: 0,
+            toolTokens: 0,
+          })
+
           const strategy = ensureLcmRuntimeStrategyConfigured()
           yield* Effect.promise(() =>
             strategy.compactManual({
               sessionID,
               conversationId,
+              user: lastUserMsg.info,
+              model,
+              overhead: budget.overhead,
+              reserve: budget.reserve,
+              contextWindow: model.limit.context,
             }),
           )
           return { success: true }

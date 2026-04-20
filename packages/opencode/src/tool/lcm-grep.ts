@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import * as Tool from "./tool"
 import { LcmDb } from "../session/lcm/db"
 import DESCRIPTION from "./lcm-grep.txt"
-import { Log } from "../util/log"
+import { Log } from "../util"
 
 const log = Log.create({ service: "tool.lcm_grep" })
 

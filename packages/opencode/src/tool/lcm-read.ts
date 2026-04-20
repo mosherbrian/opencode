@@ -1,3 +1,4 @@
+import * as Bridge from "../session/lcm/upstream-bridge"
 import z from "zod"
 import { Effect } from "effect"
 import * as Tool from "./tool"
@@ -5,7 +6,7 @@ import { LcmDb } from "../session/lcm/db"
 import type { LcmToolMetadata } from "../session/lcm/types"
 import { Session } from "../session"
 import { SessionPrompt } from "../session/prompt"
-import { Log } from "../util/log"
+import { Log } from "../util"
 import DESCRIPTION from "./lcm-read.txt"
 
 const log = Log.create({ service: "tool.lcm_read" })
@@ -39,7 +40,7 @@ export const LcmReadTool = Tool.define(
     execute: (params: z.infer<typeof parameters>, ctx: Tool.Context) =>
       Effect.promise(async () => {
     // Sub-agent gate — same pattern as lcm_expand.
-    const session = await Session.get(ctx.sessionID)
+    const session = await Bridge.sessionGet(ctx.sessionID)
     if (!session.parentID) {
       return {
         title: `Read LCM file: ${params.file_id}`,
@@ -158,5 +159,5 @@ The explore sub-agent will call lcm_read and return a focused answer.`,
       output: lines.join("\n"),
     }
       }),
-  } satisfies Tool.DefWithoutID),
+  } as Tool.DefWithoutID<typeof parameters, LcmReadMetadata>),
 )

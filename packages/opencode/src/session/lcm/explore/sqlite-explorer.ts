@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite"
-import { Log } from "@/util/log"
-import { Token } from "@/util/token"
+import { Log } from "@/util"
+import { Token } from "@/util"
 
 /**
  * SQLite Database Exploration Agent

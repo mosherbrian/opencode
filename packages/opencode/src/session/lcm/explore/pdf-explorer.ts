@@ -1,6 +1,6 @@
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { TextExplorer } from "./text-explorer"
-import type { Provider } from "@/provider/provider"
+import type { Provider } from "@/provider"
 
 /**
  * PDF Exploration Agent for LCM

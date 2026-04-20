@@ -1,7 +1,8 @@
+import * as Bridge from "./upstream-bridge"
 import { generateText } from "ai"
-import { Provider } from "@/provider/provider"
-import { Log } from "@/util/log"
-import { Token } from "@/util/token"
+import { Provider } from "@/provider"
+import { Log } from "@/util"
+import { Token } from "@/util"
 import { Summary } from "./summary"
 import { LcmDb } from "./db"
 import { extractFileIds } from "./summarize"
@@ -195,7 +196,7 @@ ${formattedSummaries}
     })
 
     // Get language model for the provider
-    const language = await Provider.getLanguage(input.model)
+    const language = await Bridge.getLanguage(input.model)
 
     const runPass = async (aggressive: boolean): Promise<string> => {
       const result = await generateText(

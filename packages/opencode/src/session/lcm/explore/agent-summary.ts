@@ -1,10 +1,12 @@
+import * as Bridge from "../upstream-bridge"
 import { Session } from "@/session"
 import { SessionPrompt } from "@/session/prompt"
 import { MessageV2 } from "@/session/message-v2"
 import { Identifier } from "@/id/id"
-import { Provider } from "@/provider/provider"
-import { Log } from "@/util/log"
-import { Token } from "@/util/token"
+import { Provider } from "@/provider"
+import { Log } from "@/util"
+import { Token } from "@/util"
+import { MessageID } from "@/session/schema"
 
 const log = Log.create({ service: "lcm.explore.agent-summary" })
 
@@ -201,8 +203,8 @@ export async function generateAgentSummary(input: AgentSummaryInput): Promise<Ag
   })
 
   // Create a child session for the exploration agent
-  const session = await Session.create({
-    parentID: input.sessionID,
+  const session = await Bridge.sessionCreate({
+    parentID: input.sessionID as any,
     title: `Exploring ${fileName} (${input.language})`,
   })
 
@@ -235,11 +237,11 @@ ${input.structuredMetadata}
 
 Write your summary in clear prose. Use actual names from the code. Don't reproduce code - describe what it does.`
 
-  const messageID = Identifier.ascending("message")
+  const messageID = MessageID.ascending()
 
   // Set up abort handling
   function cancel() {
-    SessionPrompt.cancel(session.id)
+    Bridge.promptCancel(session.id)
   }
   if (input.abort) {
     input.abort.addEventListener("abort", cancel)
@@ -247,7 +249,7 @@ Write your summary in clear prose. Use actual names from the code. Don't reprodu
 
   try {
     // Run the exploration agent
-    const result = await SessionPrompt.prompt({
+    const result = await Bridge.promptPrompt({
       messageID,
       sessionID: session.id,
       model: {

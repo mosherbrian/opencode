@@ -4,10 +4,9 @@ import * as Tool from "./tool"
 import { LcmRetrievalFacade } from "../session/lcm/retrieval-facade"
 import type { LcmRetrieval } from "../session/lcm/retrieval"
 import { SessionPrompt } from "../session/prompt"
-import { Config } from "../config/config"
-import { executeTask } from "./task"
+import * as Bridge from "../session/lcm/upstream-bridge"
 import DESCRIPTION from "./lcm-expand-query.txt"
-import { Log } from "../util/log"
+import { Log } from "../util"
 
 const log = Log.create({ service: "tool.lcm_expand_query" })
 
@@ -98,8 +97,7 @@ export const LcmExpandQueryTool = Tool.define(
       query,
     })
 
-    const config = await Config.get()
-    const taskResult = await executeTask(
+    const taskResult = await Bridge.executeTask(
       {
         description: "Expand query context",
         prompt: buildDelegatedPrompt({
@@ -108,11 +106,8 @@ export const LcmExpandQueryTool = Tool.define(
           maxTokens,
         }),
         subagent_type: "explore",
-        delegated_scope: "Expand selected summary IDs and answer the specific recall question",
-        kept_work: "Resolve candidate summary scope and integrate returned answer",
+        parentSessionID: ctx.sessionID,
       },
-      ctx,
-      config,
     )
 
     const parsed = parseDelegatedReply(taskResult.output, resolved.summaryIds)

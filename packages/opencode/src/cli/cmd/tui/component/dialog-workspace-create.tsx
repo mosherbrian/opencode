@@ -7,7 +7,7 @@ import { useProject } from "@tui/context/project"
 import { createMemo, createSignal, onMount } from "solid-js"
 import { setTimeout as sleep } from "node:timers/promises"
 import { errorData, errorMessage } from "@/util/error"
-import * as Log from "@/util/log"
+import { Log } from "@/util"
 import { useSDK } from "../context/sdk"
 import { useToast } from "../ui/toast"
 
@@ -17,7 +17,7 @@ type Adaptor = {
   description: string
 }
 
-const log = Log.Default.clone().tag("service", "tui-workspace")
+const log = Log.create({ service: "tui-workspace" })
 
 function scoped(sdk: ReturnType<typeof useSDK>, sync: ReturnType<typeof useSync>, workspaceID: string) {
   return createOpencodeClient({

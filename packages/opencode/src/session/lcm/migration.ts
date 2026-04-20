@@ -1,5 +1,6 @@
+import * as Bridge from "./upstream-bridge"
 import z from "zod"
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { LcmDb } from "./db"
 import { Session } from "@/session"
 import { MessageV2 } from "@/session/message-v2"
@@ -279,7 +280,7 @@ export namespace LcmMigration {
       }
 
       // Get session info
-      const sessionInfo = await Session.get(sessionID).catch(() => null)
+      const sessionInfo = await Bridge.sessionGet(sessionID as any).catch(() => null)
       if (!sessionInfo) {
         return {
           success: false,
@@ -290,7 +291,7 @@ export namespace LcmMigration {
       }
 
       // Get all messages for the session
-      const messages = await Session.messages({ sessionID })
+      const messages = await Bridge.sessionMessages({ sessionID: sessionID as any })
       if (messages.length === 0) {
         log.info("session has no messages, skipping", { sessionID })
         return {

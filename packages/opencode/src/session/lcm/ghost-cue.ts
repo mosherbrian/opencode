@@ -1,7 +1,8 @@
+import * as Bridge from "./upstream-bridge"
 import path from "path"
 import { generateText } from "ai"
-import { Provider } from "@/provider/provider"
-import { Log } from "@/util/log"
+import { Provider } from "@/provider"
+import { Log } from "@/util"
 
 const GHOST_CUE_MAX_OUTPUT_TOKENS = 220
 let ghostCuePromptCache: string | null = null
@@ -75,7 +76,7 @@ export namespace LcmGhostCue {
     abort?: AbortSignal
   }): Promise<string> {
     const prompt = await getGhostCuePrompt()
-    const language = await Provider.getLanguage(input.model)
+    const language = await Bridge.getLanguage(input.model)
     const result = await generateText(
       createGhostCueLlmRequest({
         model: language,

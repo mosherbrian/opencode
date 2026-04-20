@@ -5,8 +5,8 @@ import type * as Tool from "./tool"
 import { Instance } from "../project/instance"
 import { LcmDb } from "../session/lcm/db"
 import { ExploreDispatcher } from "../session/lcm/explore/dispatcher"
-import { Log } from "../util/log"
-import type { Provider } from "../provider/provider"
+import { Log } from "../util"
+import type { Provider } from "../provider"
 import { assertExternalDirectory } from "./external-directory"
 
 const log = Log.create({ service: "tool.map" })

@@ -1,6 +1,6 @@
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { LcmDb } from "./db"
-import { Token } from "@/util/token"
+import { Token } from "@/util"
 
 const log = Log.create({ service: "lcm.integrity" })
 

@@ -1,7 +1,8 @@
+import * as Bridge from "../upstream-bridge"
 import { generateText } from "ai"
-import { Provider } from "@/provider/provider"
-import { Log } from "@/util/log"
-import { Token } from "@/util/token"
+import { Provider } from "@/provider"
+import { Log } from "@/util"
+import { Token } from "@/util"
 import { ShebangDetector } from "./shebang-detector"
 import EXPLORE_TEXT_PROMPT from "../prompts/explore-text.txt"
 
@@ -465,7 +466,7 @@ ${input.content}
     const promptTemplate = EXPLORE_TEXT_PROMPT
 
     // Get language model for the provider
-    const languageModel = await Provider.getLanguage(input.model)
+    const languageModel = await Bridge.getLanguage(input.model)
 
     // Call the LLM to generate the exploration
     const result = await generateText({

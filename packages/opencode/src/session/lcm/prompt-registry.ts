@@ -1,3 +1,4 @@
+import * as Bridge from "./upstream-bridge"
 import { getLcmPolicyConfig, type LcmMode } from "./config"
 import DOLT_CONDENSE_D2_PROMPT from "./prompts/dolt/condense/d2.txt"
 import DOLT_SUMMARIZE_D1_PROMPT from "./prompts/dolt/summarize/d1.txt"
@@ -97,8 +98,8 @@ async function resolveConfiguredPromptOverride(key: LcmPromptRegistryKey): Promi
     if (trimmed.length > 0) return trimmed
   }
 
-  const { Config } = await import("@/config/config")
-  const configured = await Config.get().catch(() => null)
+  // Config accessed via bridge
+  const configured = await Bridge.configGet().catch(() => null)
   if (!configured) return null
   const override = configured.lcm?.prompts?.[key]
   if (typeof override !== "string") return null

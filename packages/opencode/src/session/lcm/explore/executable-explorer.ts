@@ -1,5 +1,5 @@
-import { Log } from "@/util/log"
-import { Token } from "@/util/token"
+import { Log } from "@/util"
+import { Token } from "@/util"
 import { $ } from "bun"
 
 /**

@@ -1,3 +1,4 @@
+import * as Bridge from "../session/lcm/upstream-bridge"
 import { Effect } from "effect"
 import * as Tool from "./tool"
 import DESCRIPTION from "./llm-map.txt"
@@ -5,10 +6,9 @@ import z from "zod"
 import { generateText } from "ai"
 import { MessageV2 } from "../session/message-v2"
 import { SessionPrompt } from "../session/prompt"
-import { Provider } from "../provider/provider"
-import { ProviderTransform } from "../provider/transform"
+import { Provider, ProviderTransform } from "../provider"
 import { LcmDb } from "../session/lcm/db"
-import { Log } from "../util/log"
+import { Log } from "../util"
 import type postgres from "postgres"
 import {
   buildUserMessage,
@@ -101,12 +101,12 @@ async function resolveModel(
   const value = modelParam ?? "small"
 
   if (value === "default") {
-    const model = await Provider.getModel(parentProviderID, parentModelID)
+    const model = await Bridge.getModel(parentProviderID, parentModelID)
     return { providerID: parentProviderID, modelID: parentModelID, model }
   }
 
   if (value === "small") {
-    const smallModel = await Provider.getSmallModel(parentProviderID)
+    const smallModel = await Bridge.getSmallModel(parentProviderID)
     if (!smallModel) {
       throw new Error(
         'No small model configured — set "small_model" in config, or pass model: "default" to use the parent model',
@@ -121,7 +121,7 @@ async function resolveModel(
 
   // Explicit "provider/model-id" override
   const parsed = Provider.parseModel(value)
-  const model = await Provider.getModel(parsed.providerID, parsed.modelID)
+  const model = await Bridge.getModel(parsed.providerID, parsed.modelID)
   return { providerID: parsed.providerID, modelID: parsed.modelID, model }
 }
 
@@ -175,18 +175,13 @@ export const LlmMapTool = Tool.define(
 
     // --- Step 6: Resolve model parameter to concrete model ---
     const resolved = await resolveModel(params.model, parentProviderID, parentModelID)
-    const languageModel = await Provider.getLanguage(resolved.model)
+    const languageModel = await Bridge.getLanguage(resolved.model)
 
     // Merge JSON mode provider options for providers that support it
     const jsonModeOpts = buildJsonModeProviderOptions(resolved.model)
     const providerOptions = jsonModeOpts
 
-    const maxOutputTokens = ProviderTransform.maxOutputTokens(
-      resolved.model.api.npm,
-      providerOptions,
-      resolved.model.limit.output,
-      32_000,
-    )
+    const maxOutputTokens = ProviderTransform.maxOutputTokens(resolved.model)
 
     log.info("resolved model", {
       model: params.model ?? "small",
@@ -195,8 +190,8 @@ export const LlmMapTool = Tool.define(
     })
 
     // --- Step 7: Get LCM model reference (use parent model for LCM) ---
-    const lcmModel = await Provider.getModel(parentProviderID, parentModelID)
-    const conversationId = await SessionPrompt.getOrCreateLcmConversation(ctx.sessionID, lcmModel)
+    const lcmModel = await Bridge.getModel(parentProviderID, parentModelID)
+    const conversationId = await SessionPrompt.getLcmConversationId(ctx.sessionID)
     if (conversationId === null) {
       throw new Error("LCM database is not available")
     }

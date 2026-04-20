@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import * as Tool from "./tool"
 import { LcmDb } from "../session/lcm/db"
 import { SessionPrompt } from "../session/prompt"
-import { Log } from "../util/log"
+import { Log } from "../util"
 import DESCRIPTION from "./lcm-describe.txt"
 
 const log = Log.create({ service: "tool.lcm_describe" })
@@ -50,10 +50,10 @@ export const LcmDescribeTool = Tool.define(
               found: false,
             },
             output: `Unknown LCM ID format: "${id}". Expected file_xxx or sum_xxx.`,
-          }
+          } satisfies Tool.ExecuteResult<LcmDescribeMetadata>
         }
       }),
-  } satisfies Tool.DefWithoutID<typeof parameters, LcmDescribeMetadata>),
+  } as Tool.DefWithoutID<typeof parameters, LcmDescribeMetadata>),
 )
 
 function formatStorageKind(storageKind: "path" | "inline_text" | "inline_binary"): string {

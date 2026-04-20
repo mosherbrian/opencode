@@ -1,7 +1,8 @@
-import { Log } from "@/util/log"
-import { Token } from "@/util/token"
+import * as Bridge from "./lcm/upstream-bridge"
+import { Log } from "@/util"
+import { Token } from "@/util"
 import { SystemPrompt } from "./system"
-import type { Provider } from "@/provider/provider"
+import type { Provider } from "@/provider"
 import type { Agent } from "@/agent/agent"
 import type { Tool } from "ai"
 import { getLcmPolicyConfig, type LcmMode, type LcmModePolicy } from "./lcm/config"
@@ -104,12 +105,11 @@ export namespace TokenBudget {
       return { parts: cached.parts, tokenCount: cached.tokenCount }
     }
 
-    // Assemble system prompt: header + agent/provider prompt + buildSections
-    const system = SystemPrompt.header(input.model.providerID)
+    // Assemble system prompt: agent/provider prompt (matching upstream llm.ts pattern)
+    const system: string[] = []
     system.push(
       [
         ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
-        ...(await SystemPrompt.buildSections(input.model, input.apiConfig)),
       ]
         .filter((x) => x)
         .join("\n"),
@@ -118,10 +118,10 @@ export namespace TokenBudget {
     // Apply plugin transform (same as llm.ts)
     // Lazy import to avoid circular initialization:
     // token-budget → @/plugin → session/index → ./prompt → ./token-budget
-    const { Plugin } = await import("@/plugin")
+    // Plugin accessed via bridge
     const header = system[0]
     const original = [...system]
-    await Plugin.trigger("experimental.chat.system.transform", { sessionID: input.sessionID }, { system })
+    await Bridge.pluginTrigger("experimental.chat.system.transform", { sessionID: input.sessionID }, { system })
     if (system.length === 0) {
       system.push(...original)
     }
@@ -132,7 +132,7 @@ export namespace TokenBudget {
       system.push(header, rest.join("\n"))
     }
 
-    const tokenCount = system.reduce((sum, part) => sum + Token.estimate(part), 0)
+    const tokenCount = system.reduce((sum: number, part: string) => sum + Token.estimate(part), 0)
 
     systemPromptCache.set(input.sessionID, {
       parts: system,

@@ -1,5 +1,5 @@
 import postgres from "postgres"
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { LCM_DATABASE_URL, LCM_EXTERNAL_DATABASE } from "./config"
 
 /**

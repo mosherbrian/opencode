@@ -1,6 +1,6 @@
-import { Provider } from "@/provider/provider"
+import { Provider } from "@/provider"
 import { MessageV2 } from "@/session/message-v2"
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { getLcmPolicyConfig, type LcmMode } from "./config"
 import { LcmContext } from "./context"
 import { LcmDb } from "./db"

@@ -64,7 +64,7 @@ export async function handleLargeToolOutput(input: {
     const { LcmDb } = await import("./lcm/db")
     const { SessionPrompt } = await import("./prompt")
 
-    const conversationId = await SessionPrompt.getOrCreateLcmConversation(input.sessionID, input.model)
+    const conversationId = await SessionPrompt.getLcmConversationId(input.sessionID)
     if (conversationId === null) {
       log.warn("failed to get LCM conversation, returning truncated output", {
         toolName: input.toolName,

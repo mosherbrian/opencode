@@ -1,4 +1,4 @@
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { getLcmPolicyConfig, type LcmMode } from "./config"
 import { LcmDb } from "./db"
 import { LcmRetrieval } from "./retrieval"

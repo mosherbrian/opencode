@@ -1,6 +1,6 @@
 import path from "path"
-import { Token } from "@/util/token"
-import { Log } from "@/util/log"
+import { Token } from "@/util"
+import { Log } from "@/util"
 import { ShebangDetector } from "./shebang-detector"
 
 /**

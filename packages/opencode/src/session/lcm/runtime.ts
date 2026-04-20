@@ -1,4 +1,4 @@
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { LcmDb } from "./db"
 import { ensureEmbeddedPostgresRunning, isEmbeddedPostgresSupported } from "./embedded-postgres"
 import { LCM_EXTERNAL_DATABASE } from "./config"

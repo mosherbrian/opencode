@@ -1,3 +1,4 @@
+import * as Bridge from "../session/lcm/upstream-bridge"
 import { Effect } from "effect"
 import * as Tool from "./tool"
 import DESCRIPTION from "./agentic-map.txt"
@@ -5,9 +6,9 @@ import z from "zod"
 import { Session } from "../session"
 import { MessageV2 } from "../session/message-v2"
 import { SessionPrompt } from "../session/prompt"
-import { Provider } from "../provider/provider"
+import { Provider } from "../provider"
 import { LcmDb } from "../session/lcm/db"
-import { Log } from "../util/log"
+import { Log } from "../util"
 import type postgres from "postgres"
 import {
   stableStringify,
@@ -107,10 +108,10 @@ export const AgenticMapTool = Tool.define(
     if (parentMsg.info.role !== "assistant") throw new Error("Not an assistant message")
     const parentProviderID = parentMsg.info.providerID
     const parentModelID = parentMsg.info.modelID
-    const model = await Provider.getModel(parentProviderID, parentModelID)
+    const model = await Bridge.getModel(parentProviderID, parentModelID)
 
     // --- Step 6: Register input in LCM ---
-    const conversationId = await SessionPrompt.getOrCreateLcmConversation(ctx.sessionID, model)
+    const conversationId = await SessionPrompt.getLcmConversationId(ctx.sessionID)
     if (conversationId === null) {
       throw new Error("LCM database is not available")
     }
@@ -118,7 +119,7 @@ export const AgenticMapTool = Tool.define(
     const inputLcmId = await registerFileInLcm(conversationId, resolvedInputPath, model, ctx.abort)
 
     // --- Step 7: Resolve parent permissions for read_only=false inheritance ---
-    const parentSession = await Session.get(ctx.sessionID)
+    const parentSession = await Bridge.sessionGet(ctx.sessionID)
     const parentPermissions = parentSession.permission ?? []
 
     // --- Step 8: Create map run in Postgres (multi-tenant aware) ---
@@ -194,7 +195,7 @@ export const AgenticMapTool = Tool.define(
       async function processItem(itemIndex: number, item: unknown): Promise<void> {
         const itemStartTime = Date.now()
 
-        const session = await Session.create({
+        const session = await Bridge.sessionCreate({
           parentID: ctx.sessionID,
           title: `agentic_map item ${itemIndex} (map ${mapId.slice(0, 8)})`,
           permission: params.read_only
@@ -219,7 +220,7 @@ export const AgenticMapTool = Tool.define(
         )
 
         const timeoutHandle = setTimeout(() => {
-          SessionPrompt.cancel(session.id)
+          Bridge.promptCancel(session.id)
         }, timeoutSeconds * 1000)
 
         let attemptsUsed = 0
@@ -227,7 +228,7 @@ export const AgenticMapTool = Tool.define(
 
         try {
           attemptsUsed = 1
-          let result = await SessionPrompt.prompt({
+          let result = await Bridge.promptPrompt({
             sessionID: session.id,
             model: { modelID: parentModelID, providerID: parentProviderID },
             agent: ctx.agent,
@@ -277,7 +278,7 @@ export const AgenticMapTool = Tool.define(
             WHERE map_id = ${mapId} AND item_index = ${itemIndex}
           `
 
-            result = await SessionPrompt.prompt({
+            result = await Bridge.promptPrompt({
               sessionID: session.id,
               model: { modelID: parentModelID, providerID: parentProviderID },
               agent: ctx.agent,

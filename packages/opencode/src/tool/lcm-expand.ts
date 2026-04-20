@@ -1,10 +1,11 @@
+import * as Bridge from "../session/lcm/upstream-bridge"
 import z from "zod"
 import { Effect } from "effect"
 import * as Tool from "./tool"
 import { LcmDb } from "../session/lcm/db"
 import { Session } from "../session"
 import { SessionPrompt } from "../session/prompt"
-import { Log } from "../util/log"
+import { Log } from "../util"
 import DESCRIPTION from "./lcm-expand.txt"
 
 const log = Log.create({ service: "tool.lcm_expand" })
@@ -37,7 +38,7 @@ export const LcmExpandTool = Tool.define(
     execute: (params: z.infer<typeof parameters>, ctx: Tool.Context) =>
       Effect.promise(async () => {
     // Check if this is a sub-agent by looking at session parentID
-    const session = await Session.get(ctx.sessionID)
+    const session = await Bridge.sessionGet(ctx.sessionID)
     if (!session.parentID) {
       return {
         title: `Expand summary: ${params.summary_id}`,
@@ -186,5 +187,5 @@ The sub-agent will be able to call lcm_expand to see the full content.`,
       output: `${metadataBlock}\n\nExpanded summary "${params.summary_id}" (${summary.kind}) to ${messages.length} original messages:\n\n${output}`,
     }
       }),
-  } satisfies Tool.DefWithoutID),
+  } as Tool.DefWithoutID<typeof parameters, LcmExpandMetadata>),
 )

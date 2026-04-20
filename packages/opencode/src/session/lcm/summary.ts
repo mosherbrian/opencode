@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 import z from "zod"
-import { Token } from "@/util/token"
+import { Token } from "@/util"
 
 /**
  * Lossless Context Management (LCM) Summary Module
