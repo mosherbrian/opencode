@@ -67,9 +67,13 @@ export default [
 
   SyncEvent.project(Session.Event.Updated, (db, data) => {
     const info = data.info
+    const partialRow = toPartialRow(info)
+    // LCM fields are in-memory only (not persisted to SessionTable).
+    // Skip the update if no persistable fields changed.
+    if (Object.keys(partialRow).length === 0) return
     const row = db
       .update(SessionTable)
-      .set(toPartialRow(info))
+      .set(partialRow)
       .where(eq(SessionTable.id, data.sessionID))
       .returning()
       .get()
