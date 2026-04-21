@@ -597,13 +597,13 @@ async function buildLcmModelMessages(input: {
       model: input.model,
       systemPromptTokens: 0,
       toolTokens,
-      softThresholdOverride: Number(process.env.OPENCODE_LCM_CONTEXT_THRESHOLD) || undefined,
+      softThresholdOverride: Number(process.env.VOLTCODE_LCM_CONTEXT_THRESHOLD || process.env.OPENCODE_LCM_CONTEXT_THRESHOLD) || undefined,
     })
     TokenBudget.storeSessionBudget(input.sessionID, budget)
     const overhead = budget.overhead
     const reserve = budget.reserve
     const contextWindow = input.model.limit.context
-    const softThresholdOverride = Number(process.env.OPENCODE_LCM_CONTEXT_THRESHOLD) || undefined
+    const softThresholdOverride = Number(process.env.VOLTCODE_LCM_CONTEXT_THRESHOLD || process.env.OPENCODE_LCM_CONTEXT_THRESHOLD) || undefined
     const thresholdCheck = await LcmContext.isOverThreshold({
       conversationId,
       overhead,

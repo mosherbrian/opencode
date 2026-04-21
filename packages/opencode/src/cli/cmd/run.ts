@@ -306,6 +306,7 @@ export const RunCommand = cmd({
   },
   handler: async (args) => {
     if (args["context-threshold"]) {
+      process.env.VOLTCODE_LCM_CONTEXT_THRESHOLD = String(args["context-threshold"])
       process.env.OPENCODE_LCM_CONTEXT_THRESHOLD = String(args["context-threshold"])
     }
 
