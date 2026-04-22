@@ -74,6 +74,22 @@ import { Token } from "@/util"
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
 
+/**
+ * Tracks the real input token count (from API usage response) per session.
+ * Updated after each model response, used by LCM for accurate threshold decisions.
+ * This is the ground truth — it includes system prompt, tools, message serialization
+ * overhead, and everything else the model actually receives.
+ */
+const lastKnownInputTokens = new Map<string, number>()
+
+export function setLastKnownInputTokens(sessionID: string, inputTokens: number) {
+  lastKnownInputTokens.set(sessionID, inputTokens)
+}
+
+export function getLastKnownInputTokens(sessionID: string): number | undefined {
+  return lastKnownInputTokens.get(sessionID)
+}
+
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
 IMPORTANT:
@@ -606,12 +622,18 @@ async function buildLcmModelMessages(input: {
     const reserve = budget.reserve
     const contextWindow = input.model.limit.context
     const softThresholdOverride = Number(process.env.VOLTCODE_LCM_CONTEXT_THRESHOLD || process.env.OPENCODE_LCM_CONTEXT_THRESHOLD) || undefined
+
+    // Use real API-reported input tokens if available (ground truth),
+    // otherwise fall back to LCM's Postgres token count estimate
+    const realTokens = getLastKnownInputTokens(input.sessionID)
+
     const thresholdCheck = await LcmContext.isOverThreshold({
       conversationId,
-      overhead,
+      overhead: realTokens != null ? 0 : overhead, // overhead already included in real tokens
       reserve,
       contextWindow,
       softThresholdOverride,
+      realInputTokens: realTokens,
     })
     const compactionInFlight = isThresholdCompactionInFlight(conversationId)
 
@@ -626,12 +648,13 @@ async function buildLcmModelMessages(input: {
       compactionInFlight,
       overhead,
       reserve,
+      realTokens: realTokens ?? "none",
       strategy: strategy.name,
     })
     // DEBUG: temporary file output to diagnose compaction trigger
     import("fs").then(fs => fs.appendFileSync(
       (process.env.HOME || process.env.USERPROFILE) + "/lcm-trace.log",
-      `[${new Date().toISOString()}] tokens=${thresholdCheck.currentTokens} soft=${thresholdCheck.softThreshold} hard=${thresholdCheck.hardLimit} overSoft=${thresholdCheck.overSoft} overHard=${thresholdCheck.overHard} overhead=${overhead} reserve=${reserve} ctxWindow=${contextWindow} threshold=${softThresholdOverride} strategy=${strategy.name}\n`
+      `[${new Date().toISOString()}] tokens=${thresholdCheck.currentTokens} realTokens=${realTokens ?? "none"} soft=${thresholdCheck.softThreshold} hard=${thresholdCheck.hardLimit} overSoft=${thresholdCheck.overSoft} overHard=${thresholdCheck.overHard} overhead=${realTokens != null ? 0 : overhead} reserve=${reserve} ctxWindow=${contextWindow} threshold=${softThresholdOverride} strategy=${strategy.name}\n`
     )).catch(() => {})
 
     // --- LCM: publish metrics to session for TUI display ---

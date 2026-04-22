@@ -20,6 +20,7 @@ import { Question } from "@/question"
 import { errorMessage } from "@/util/error"
 import { isLcmReady } from "./lcm/runtime"
 import { handleLargeToolOutput } from "./large-tool-output"
+import { setLastKnownInputTokens } from "./prompt"
 import { Log } from "@/util"
 import { isRecord } from "@/util/record"
 
@@ -379,6 +380,11 @@ export const layer: Layer.Layer<
             ctx.assistantMessage.finish = value.finishReason
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
+            // Update LCM with real input token count from API response
+            if (isLcmReady()) {
+              const realInputTokens = (usage.tokens.input ?? 0) + (usage.tokens.cache?.read ?? 0) + (usage.tokens.cache?.write ?? 0)
+              setLastKnownInputTokens(ctx.sessionID, realInputTokens)
+            }
             yield* session.updatePart({
               id: PartID.ascending(),
               reason: value.finishReason,

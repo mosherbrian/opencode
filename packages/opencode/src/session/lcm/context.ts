@@ -272,6 +272,11 @@ export namespace LcmContext {
     softThresholdOverride?: number
     laneTokens?: Partial<TokenBudget.LaneTokenCounts>
     currentlyCompacting?: Partial<Record<TokenBudget.LaneName, boolean>>
+    /** Real input token count from the API response (ground truth). When provided,
+     *  this replaces the Postgres token count estimate for threshold decisions.
+     *  Overhead should be set to 0 when using this, as real tokens already include
+     *  system prompt, tools, and serialization overhead. */
+    realInputTokens?: number
   }): Promise<{
     overHard: boolean
     overSoft: boolean
@@ -282,7 +287,10 @@ export namespace LcmContext {
     laneTokens: TokenBudget.LaneTokenCounts
     laneDecisions: TokenBudget.DoltLaneDecisions
   }> {
-    const currentTokens = await LcmDb.getContextTokenCount(input.conversationId)
+    const dbTokens = await LcmDb.getContextTokenCount(input.conversationId)
+    // Use real API-reported input tokens when available (includes system prompt,
+    // tools, serialization overhead). Falls back to Postgres estimate.
+    const currentTokens = input.realInputTokens ?? dbTokens
     const measuredLaneTokens = await LcmDb.getContextLaneTokenCounts(input.conversationId)
     const hardLimit = input.contextWindow - input.overhead - input.reserve
     const softRaw =
@@ -319,13 +327,16 @@ export namespace LcmContext {
       overhead: input.overhead,
       reserve: input.reserve,
       softThresholdOverride: input.softThresholdOverride ?? "none",
-      overSoft: laneDecisions.compactAny,
+      overSoft: input.realInputTokens != null ? currentTokens > softThreshold : laneDecisions.compactAny,
       overHard: currentTokens > hardLimit,
+      usingRealTokens: input.realInputTokens != null,
     })
 
     return {
       overHard: currentTokens > hardLimit,
-      overSoft: laneDecisions.compactAny,
+      // When using real API tokens, use simple threshold comparison instead of
+      // Dolt lane decisions (which are based on Postgres token estimates)
+      overSoft: input.realInputTokens != null ? currentTokens > softThreshold : laneDecisions.compactAny,
       currentTokens,
       hardLimit,
       softThreshold,
