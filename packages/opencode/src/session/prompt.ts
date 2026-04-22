@@ -679,6 +679,10 @@ async function buildLcmModelMessages(input: {
       }
     } else if (thresholdCheck.overSoft || strategy.name === "upward") {
       // Tier 1 (soft threshold): schedule async compaction, proceed immediately
+      import("fs").then(fs => fs.appendFileSync(
+        (process.env.HOME || process.env.USERPROFILE) + "/lcm-trace.log",
+        `[${new Date().toISOString()}] COMPACTION TRIGGERED overSoft=${thresholdCheck.overSoft} strategy=${strategy.name} tokens=${thresholdCheck.currentTokens}\n`
+      )).catch(() => {})
       const job = scheduleThresholdCompaction({
         conversationId,
         sessionID: input.sessionID,
