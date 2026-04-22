@@ -7,7 +7,9 @@ const log = Log.create({ service: "session.large-tool-output" })
  * Threshold for large tool output in tokens.
  * Outputs larger than this will be stored in LCM and replaced with a reference.
  */
-export const LARGE_TOOL_OUTPUT_THRESHOLD = 10_000
+export const LARGE_TOOL_OUTPUT_THRESHOLD = Number(
+  process.env.VOLTCODE_LCM_LARGE_TOOL_THRESHOLD || process.env.OPENCODE_LCM_LARGE_TOOL_THRESHOLD
+) || 10_000
 
 /**
  * Result of handling a large tool output

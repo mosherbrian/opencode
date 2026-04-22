@@ -18,6 +18,8 @@ import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider"
 import { Question } from "@/question"
 import { errorMessage } from "@/util/error"
+import { isLcmReady } from "./lcm/runtime"
+import { handleLargeToolOutput } from "./large-tool-output"
 import { Log } from "@/util"
 import { isRecord } from "@/util/record"
 
@@ -179,12 +181,26 @@ export const layer: Layer.Layer<
       ) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return
+
+        // --- LCM: intercept large tool outputs ---
+        let finalOutput = output.output
+        if (isLcmReady()) {
+          const result = yield* Effect.promise(() =>
+            handleLargeToolOutput({
+              output: output.output,
+              toolName: output.title,
+              sessionID: ctx.sessionID,
+            }),
+          )
+          finalOutput = result.output
+        }
+
         yield* session.updatePart({
           ...match.part,
           state: {
             status: "completed",
             input: match.part.state.input,
-            output: output.output,
+            output: finalOutput,
             metadata: output.metadata,
             title: output.title,
             time: { start: match.part.state.time.start, end: Date.now() },
