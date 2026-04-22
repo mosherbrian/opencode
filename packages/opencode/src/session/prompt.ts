@@ -626,6 +626,11 @@ async function buildLcmModelMessages(input: {
       reserve,
       strategy: strategy.name,
     })
+    // DEBUG: temporary file output to diagnose compaction trigger
+    import("fs").then(fs => fs.appendFileSync(
+      (process.env.HOME || process.env.USERPROFILE) + "/lcm-trace.log",
+      `[${new Date().toISOString()}] tokens=${thresholdCheck.currentTokens} soft=${thresholdCheck.softThreshold} hard=${thresholdCheck.hardLimit} overSoft=${thresholdCheck.overSoft} overHard=${thresholdCheck.overHard} overhead=${overhead} reserve=${reserve} ctxWindow=${contextWindow} threshold=${softThresholdOverride} strategy=${strategy.name}\n`
+    )).catch(() => {})
 
     // --- LCM: publish metrics to session for TUI display ---
     const flagThreshold = softThresholdOverride ?? 0
