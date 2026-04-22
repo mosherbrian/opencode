@@ -581,6 +581,31 @@ export const SessionRoutes = lazy(() =>
           const agent = yield* Agent.Service
 
           yield* revert.cleanup(yield* session.get(sessionID))
+
+          if (isLcmReady()) {
+            // LCM handles compaction
+            const provider = yield* Provider.Service
+            const info = yield* session.get(sessionID)
+            const conversationId = (info as Record<string, unknown>).lcmConversationId as number | undefined
+            if (conversationId) {
+              const model = yield* provider.getModel(body.providerID, body.modelID)
+              const budget = TokenBudget.computeBudget({ model, systemPromptTokens: 0, toolTokens: 0 })
+              const strategy = ensureLcmRuntimeStrategyConfigured()
+              yield* Effect.promise(() =>
+                strategy.compactManual({
+                  sessionID,
+                  conversationId,
+                  user: { role: "user" as const, model: { providerID: body.providerID, modelID: body.modelID } } as any,
+                  model,
+                  overhead: budget.overhead,
+                  reserve: budget.reserve,
+                  contextWindow: model.limit.context,
+                }),
+              )
+            }
+            return true
+          }
+
           const msgs = yield* session.messages({ sessionID })
           const defaultAgent = yield* agent.defaultAgent()
           let currentAgent = defaultAgent
