@@ -2320,6 +2320,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             // --- LCM: context management ---
             // When LCM is active, replace standard message conversion with
             // LCM-managed context window (sync, threshold compaction, ghost cues).
+            import("fs").then(fs => fs.appendFileSync(
+              (process.env.HOME || process.env.USERPROFILE) + "/lcm-trace.log",
+              `[${new Date().toISOString()}] isLcmReady=${isLcmReady()} about to choose path\n`
+            )).catch(() => {})
             const modelMsgs: any[] = isLcmReady()
               ? yield* Effect.promise(() => {
                   // Estimate tool token overhead for budget computation
