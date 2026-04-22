@@ -578,6 +578,7 @@ async function buildLcmModelMessages(input: {
   sessionMessages: MessageV2.WithParts[]
   assistantMessageID?: string
   toolTokenEstimate?: number
+  systemPromptTokens?: number
   sessionGet: (id: string) => Promise<Session.Info>
   setLcm: (sessionID: string, lcm: { inputTokens: number; threshold: number }) => Promise<void>
   updatePart: (part: MessageV2.TextPart) => Promise<any>
@@ -591,12 +592,12 @@ async function buildLcmModelMessages(input: {
   try {
     await syncSessionMessagesToLcm(conversationId, input.sessionID, input.sessionMessages)
 
-    // Two-tier threshold: measure overhead
+    // Two-tier threshold: measure actual overhead from system prompt + tools
     const toolTokens = input.toolTokenEstimate ?? 0
-    // Use 0 as systemPromptTokens placeholder — actual system prompt is added separately
+    const systemTokens = input.systemPromptTokens ?? 0
     const budget = TokenBudget.computeBudget({
       model: input.model,
-      systemPromptTokens: 0,
+      systemPromptTokens: systemTokens,
       toolTokens,
       softThresholdOverride: Number(process.env.VOLTCODE_LCM_CONTEXT_THRESHOLD || process.env.OPENCODE_LCM_CONTEXT_THRESHOLD) || undefined,
     })
@@ -2325,19 +2326,24 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             // --- LCM: context management ---
             // When LCM is active, replace standard message conversion with
             // LCM-managed context window (sync, threshold compaction, ghost cues).
+            // Estimate tool + system prompt tokens for accurate budget computation
+            const toolTokenEstimate = Object.values(tools).reduce((sum, t) => {
+              const desc = (t as any).description ?? ""
+              const params = (t as any).parameters ? JSON.stringify((t as any).parameters) : ""
+              return sum + Token.estimate(desc + params)
+            }, 0)
+            const systemPromptEstimate = [
+              ...env,
+              ...(skills ? [skills] : []),
+              ...instructions,
+            ].reduce((sum, part) => sum + Token.estimate(part), 0)
+
             import("fs").then(fs => fs.appendFileSync(
               (process.env.HOME || process.env.USERPROFILE) + "/lcm-trace.log",
-              `[${new Date().toISOString()}] isLcmReady=${isLcmReady()} about to choose path\n`
+              `[${new Date().toISOString()}] isLcmReady=${isLcmReady()} toolTokens=${toolTokenEstimate} systemTokens=${systemPromptEstimate} total_overhead=${toolTokenEstimate + systemPromptEstimate}\n`
             )).catch(() => {})
             const modelMsgs: any[] = isLcmReady()
               ? yield* Effect.promise(() => {
-                  // Estimate tool token overhead for budget computation
-                  const toolTokenEstimate = Object.values(tools).reduce((sum, t) => {
-                    const desc = (t as any).description ?? ""
-                    const params = (t as any).parameters ? JSON.stringify((t as any).parameters) : ""
-                    return sum + Token.estimate(desc + params)
-                  }, 0)
-
                   return buildLcmModelMessages({
                     sessionID,
                     user: lastUser,
@@ -2345,6 +2351,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     sessionMessages: msgs,
                     assistantMessageID: handle.message.id,
                     toolTokenEstimate,
+                    systemPromptTokens: systemPromptEstimate,
                     sessionGet: (id) =>
                       run.promise(sessions.get(SessionID.make(id))),
                     setLcm: (sid, lcm) =>
