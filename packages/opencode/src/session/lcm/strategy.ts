@@ -138,9 +138,17 @@ export function isThresholdCompactionInFlight(conversationId: number): boolean {
 export function scheduleThresholdCompaction(
   input: ThresholdCompactionInput,
 ): Promise<LcmContext.ContextHandlerResult | null> | null {
-  if (inFlightCompactions.has(input.conversationId)) {
-    log.debug("scheduleThresholdCompaction: already in flight", { conversationId: input.conversationId })
-    return null
+  const existing = inFlightCompactions.get(input.conversationId)
+  if (existing) {
+    // Clear stale jobs after 60 seconds to prevent permanent blocking
+    const staleCheck = (existing as any).__startTime
+    if (staleCheck && Date.now() - staleCheck > 60_000) {
+      log.warn("clearing stale compaction job", { conversationId: input.conversationId, ageMs: Date.now() - staleCheck })
+      inFlightCompactions.delete(input.conversationId)
+    } else {
+      log.debug("scheduleThresholdCompaction: already in flight", { conversationId: input.conversationId })
+      return null
+    }
   }
 
   const strategy = getActiveLcmRuntimeStrategy()
@@ -164,6 +172,7 @@ export function scheduleThresholdCompaction(
     }
   })()
 
+  ;(job as any).__startTime = Date.now()
   inFlightCompactions.set(input.conversationId, job)
   void job.finally(() => {
     inFlightCompactions.delete(input.conversationId)
