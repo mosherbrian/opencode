@@ -144,10 +144,17 @@ export function scheduleThresholdCompaction(
   }
 
   const strategy = getActiveLcmRuntimeStrategy()
+  const fs = require("fs")
+  const traceFile = (process.env.HOME || process.env.USERPROFILE) + "/lcm-trace.log"
+  const trace = (msg: string) => { try { fs.appendFileSync(traceFile, `[${new Date().toISOString()}] ${msg}\n`) } catch {} }
+  trace(`COMPACT_JOB_START strategy=${strategy.name} conv=${input.conversationId}`)
   const job = (async () => {
     try {
-      return await strategy.compactOnThreshold(input)
+      const result = await strategy.compactOnThreshold(input)
+      trace(`COMPACT_JOB_DONE result=${JSON.stringify(result)}`)
+      return result
     } catch (error) {
+      trace(`COMPACT_JOB_ERROR ${error instanceof Error ? error.message : String(error)}\n${error instanceof Error ? error.stack : ""}`)
       log.warn("async threshold compaction failed", {
         conversationId: input.conversationId,
         strategy: strategy.name,
