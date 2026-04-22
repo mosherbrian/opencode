@@ -63,6 +63,7 @@ import {
 } from "./lcm/config"
 import {
   compactUntilUnderHardLimit,
+  ensureLcmRuntimeStrategyConfigured,
   getActiveLcmRuntimeStrategy,
   isThresholdCompactionInFlight,
   scheduleThresholdCompaction,
@@ -2391,13 +2392,33 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
             if (result === "stop") return "break" as const
             if (result === "compact") {
-              yield* compaction.create({
-                sessionID,
-                agent: lastUser.agent,
-                model: lastUser.model,
-                auto: true,
-                overflow: !handle.message.finish,
-              })
+              if (isLcmReady()) {
+                // LCM handles compaction — trigger blocking compaction
+                yield* Effect.promise(async () => {
+                  const convId = await getLcmConversationId(sessionID)
+                  if (convId) {
+                    const strategy = ensureLcmRuntimeStrategyConfigured()
+                    const budget = TokenBudget.computeBudget({ model, systemPromptTokens: 0, toolTokens: 0 })
+                    await strategy.compactManual({
+                      sessionID,
+                      conversationId: convId,
+                      user: lastUser,
+                      model,
+                      overhead: budget.overhead,
+                      reserve: budget.reserve,
+                      contextWindow: model.limit.context,
+                    })
+                  }
+                })
+              } else {
+                yield* compaction.create({
+                  sessionID,
+                  agent: lastUser.agent,
+                  model: lastUser.model,
+                  auto: true,
+                  overflow: !handle.message.finish,
+                })
+              }
             }
             return "continue" as const
           }).pipe(Effect.ensuring(instruction.clear(handle.message.id)))
