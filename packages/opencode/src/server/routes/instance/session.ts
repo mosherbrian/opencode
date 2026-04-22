@@ -31,6 +31,7 @@ import { jsonRequest, runRequest } from "./trace"
 import { LcmIntegrity } from "@/session/lcm/integrity"
 import { ensureLcmRuntimeStrategyConfigured } from "@/session/lcm/strategy"
 import { isLcmReady } from "@/session/lcm/runtime"
+import { getLcmConversationId } from "@/session/prompt"
 
 const log = Log.create({ service: "server" })
 
@@ -585,8 +586,7 @@ export const SessionRoutes = lazy(() =>
           if (isLcmReady()) {
             // LCM handles compaction
             const provider = yield* Provider.Service
-            const info = yield* session.get(sessionID)
-            const conversationId = (info as Record<string, unknown>).lcmConversationId as number | undefined
+            const conversationId = yield* Effect.promise(() => getLcmConversationId(sessionID))
             if (conversationId) {
               const model = yield* provider.getModel(body.providerID, body.modelID)
               const budget = TokenBudget.computeBudget({ model, systemPromptTokens: 0, toolTokens: 0 })
@@ -1192,7 +1192,7 @@ export const SessionRoutes = lazy(() =>
         return jsonRequest("SessionRoutes.lcmCheckIntegrity", c, function* () {
           const session = yield* Session.Service
           const info = yield* session.get(sessionID)
-          const conversationId = (info as Record<string, unknown>).lcmConversationId as number | undefined
+          const conversationId = yield* Effect.promise(() => getLcmConversationId(sessionID))
           if (!conversationId) {
             return { error: "Session does not have an LCM conversation" }
           }
@@ -1238,7 +1238,7 @@ export const SessionRoutes = lazy(() =>
           const session = yield* Session.Service
           const provider = yield* Provider.Service
           const info = yield* session.get(sessionID)
-          const conversationId = (info as Record<string, unknown>).lcmConversationId as number | undefined
+          const conversationId = yield* Effect.promise(() => getLcmConversationId(sessionID))
           if (!conversationId) {
             return { success: false, message: "Session does not have an LCM conversation" }
           }
