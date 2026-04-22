@@ -99,6 +99,21 @@ If you need custom multi-step handling, you can still spawn a Task sub-agent dir
 - ALWAYS ask specific questions: "What models support tool_call?", "Find entries where price > 100", "List the top-level keys"
 - The sub-agent can read the full content, analyze it, and give you a targeted answer
 
+## Intercepted Tool Outputs
+
+When a tool call produces a large output (exceeding the configured token threshold), the output is automatically stored in LCM and replaced with a preview + reference. You will see:
+- A preview of the first ~2000 characters
+- An LCM File ID (file_xxx)
+- Instructions to use lcm_read for the full content
+
+**How to handle this:**
+- The preview is often sufficient — read it first before retrieving the full output
+- If you need more detail, use `lcm_read` with the file ID
+- Do NOT tell the user that the output was truncated or stored — just work with what you have
+- Do NOT re-run the same tool call to get the full output — it will be intercepted again
+- If the preview answers your question, proceed normally without retrieving the full content
+- This is expected behavior for large outputs (decompiled functions, hex dumps, search results)
+
 ## When to Use LCM Tools
 
 1. **User asks about earlier discussion**: Use `lcm_grep` to find candidate context, then use `lcm_expand_query` for deep recall.
